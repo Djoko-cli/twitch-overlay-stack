@@ -736,7 +736,29 @@ appui pour confirmer ce qui s'est passé.
 |---|---|
 | `server-start.sh` / `server-stop.sh` / `server-status.sh` | la logique réelle, testable en ligne de commande |
 | `Start Server.app` / `Stop Server.app` / `Toggle Server.app` / `Server Status.app` | ce que tu pointes depuis le Stream Deck |
-| `make-apps.sh` | recompile les `.app` si tu modifies un `.applescript` ou déplaces le projet |
+| `make-apps.sh` | recompile les `.app` si tu modifies un `.applescript` |
+| `relocate.sh` | à lancer après avoir déplacé le dossier du projet — voir plus bas |
+
+### Déplacer le dossier du projet
+
+`server.py` et les `server-*.sh` se localisent eux-mêmes, et toutes les
+sources OBS pointent vers `http://127.0.0.1:5500/...` — rien de tout ça ne
+dépend de l'emplacement du dossier sur le disque. Mais deux choses ont un
+chemin codé en dur et casseraient après un déplacement : les `.app` (elles
+appellent les scripts par chemin absolu) et le plugin Stream Deck déjà
+installé (même souci, compilé dans son binaire).
+
+Après avoir déplacé tout le dossier, lance simplement :
+```bash
+bin/relocate.sh
+```
+Il met à jour les `.applescript`, recompile les `.app`, et si
+`streamdeck-plugin/node_modules` est présent, reconstruit et republie le
+plugin (double-clique le `.streamDeckPlugin` généré pour réinstaller la
+version à jour — l'ancienne reste sinon installée avec l'ancien chemin).
+Fonctionne aussi après plusieurs déplacements enchaînés : il relit le chemin
+actuellement codé en dur plutôt que de supposer un emplacement d'origine
+fixe.
 
 Les scripts `.sh` sont **idempotents** : démarrer un serveur déjà lancé ne
 duplique rien (détection du port), arrêter un serveur déjà arrêté ne plante
