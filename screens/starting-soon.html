@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Starting Soon — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<script src="../shared/timer-state.js"></script>
+<style>
+  body { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: #0b0713; }
+
+  .card {
+    position: relative; z-index: 1;
+    width: min(90vw, 620px);
+    padding: 56px 48px;
+    border-radius: var(--radius-xl);
+    display: flex; flex-direction: column; align-items: center; gap: 18px;
+    text-align: center;
+  }
+
+  .kicker {
+    /* white rather than brand purple: the background blobs are vivid enough
+       that a purple-on-purple kicker loses contrast as they drift past */
+    font-size: 14px; font-weight: 800; letter-spacing: 4px; text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.92);
+    text-shadow: 0 1px 12px rgba(0, 0, 0, 0.45), 0 0 18px var(--twitch-glow);
+  }
+  h1 { margin: 0; font-size: 44px; font-weight: 900; }
+  .sub { margin: 0; font-size: 16px; color: var(--text-dim); font-weight: 600; }
+
+  #timer {
+    display: flex; gap: 14px; margin-top: 8px;
+  }
+  .unit {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    min-width: 78px; padding: 14px 6px;
+    border-radius: var(--radius-md);
+    background: rgba(255,255,255,.08);
+    border: 1px solid var(--glass-border-dim);
+  }
+  .unit .val { font-size: 34px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .unit .lab { font-size: 11px; letter-spacing: 2px; color: var(--text-faint); text-transform: uppercase; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="blob-field">
+  <div class="blob" style="width:46vw;height:46vw;top:-10%;left:-8%;background:#E4002B;animation:float-a 13s ease-in-out infinite;"></div>
+  <div class="blob" style="width:38vw;height:38vw;bottom:-14%;right:-6%;background:#00e5ff;animation:float-b 16s ease-in-out infinite;"></div>
+  <div class="blob" style="width:30vw;height:30vw;bottom:10%;left:8%;background:#ff7a00;animation:float-c 10s ease-in-out infinite;"></div>
+</div>
+
+<div class="fringe-spin">
+  <div class="card glass glass-strong">
+    <div class="kicker">Le stream démarre bientôt</div>
+    <h1 id="titleOut">djokoow</h1>
+    <p class="sub" id="subOut">Installez-vous, ça arrive.</p>
+    <div id="timer">
+      <div class="unit"><span class="val" id="hOut">00</span><span class="lab">heures</span></div>
+      <div class="unit"><span class="val" id="mOut">00</span><span class="lab">min</span></div>
+      <div class="unit"><span class="val" id="sOut">00</span><span class="lab">sec</span></div>
+    </div>
+    <p class="sub" id="pausedOut" style="display:none;margin-top:-8px;color:#ffce6b">En pause</p>
+  </div>
+</div>
+
+<script>
+/* ---------- config via query string ------------------------------------
+   ?title=djokoow             titre affiché
+   ?sub=Texte%20libre          sous-titre
+   ?to=2026-08-09T20:00:00     force une date/heure ISO cible
+   ?minutes=10                 force une durée en minutes depuis le chargement
+
+   Sans ?to ni ?minutes, la cible vient de controls/timer.html (partagée via
+   localStorage — voir shared/timer-state.js). Recharger cette source ne
+   relance donc plus un décompte de 10 min à l'aveugle : elle retrouve la
+   cible réelle. ?to/?minutes restent utiles pour un test ponctuel — et sont
+   eux-mêmes enregistrés comme nouvelle cible partagée, pour que les
+   rechargements suivants (sans paramètre) restent cohérents avec le dernier
+   réglage explicite.
+-------------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+document.getElementById('titleOut').textContent = params.get('title') || 'djokoow';
+document.getElementById('subOut').textContent = params.get('sub') || 'Installez-vous, ça arrive.';
+
+const EXPLICIT_OVERRIDE = params.get('to') || params.get('minutes');
+
+function pad(n) { return String(Math.max(0, n)).padStart(2, '0'); }
+
+function render(state) {
+  const diff = TimerState.remainingMs(state);
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  document.getElementById('hOut').textContent = pad(h);
+  document.getElementById('mOut').textContent = pad(m);
+  document.getElementById('sOut').textContent = pad(s);
+  document.getElementById('pausedOut').style.display = state.paused ? 'block' : 'none';
+}
+
+/* Attend la première réponse du serveur avant de décider quoi que ce soit :
+   sans ça, le repli "aucune cible connue → 10 min" s'exécuterait à CHAQUE
+   chargement de page (le fetch réseau est asynchrone, donc plus lent que ce
+   code synchrone) et écraserait la vraie cible du serveur à chaque fois —
+   exactement le bug qu'on cherche à éliminer, en pire. */
+(async function boot() {
+  await TimerState.ready;
+
+  let state;
+  if (params.get('to')) {
+    state = TimerState.startAbsolute(new Date(params.get('to')));
+  } else if (params.get('minutes')) {
+    state = TimerState.startDuration(parseInt(params.get('minutes'), 10));
+  } else {
+    state = TimerState.load() || TimerState.reset(10);
+  }
+
+  render(state);
+  setInterval(() => {
+    if (!EXPLICIT_OVERRIDE) state = TimerState.load() || state;
+    render(state);
+  }, 1000);
+})();
+</script>
+</body>
+</html>

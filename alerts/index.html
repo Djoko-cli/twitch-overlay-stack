@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Alertes — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<script src="../config.js"></script>
+<style>
+  body { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+
+  #stage { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+
+  .alert-card {
+    zoom: var(--scale);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 20px 32px;
+    border-radius: var(--radius-xl);
+    min-width: 420px;
+    max-width: 720px;
+    animation: pop-in .5s cubic-bezier(.2,.9,.25,1.2) both;
+    box-shadow: var(--glass-shadow), 0 0 60px var(--twitch-glow);
+  }
+  .alert-card.leaving { animation: fade-out .4s ease forwards; }
+
+  .alert-icon {
+    font-size: 46px;
+    line-height: 1;
+    filter: drop-shadow(0 4px 10px rgba(0,0,0,.35));
+  }
+  .alert-text { display: flex; flex-direction: column; gap: 4px; }
+  .alert-kicker {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--twitch);
+    text-shadow: 0 0 12px var(--twitch-glow);
+  }
+  .alert-title { font-size: 26px; font-weight: 800; }
+  .alert-title b { color: #fff; }
+  .alert-sub { font-size: 15px; color: var(--text-dim); font-weight: 600; }
+
+  /* ---- setup screen, shown until a Twitch connection is configured ---- */
+  #setup {
+    width: min(92vw, 480px);
+    padding: 28px 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #setup h1 { font-size: 18px; margin: 0; }
+  #setup p { margin: 0; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+  #setup label { font-size: 12px; font-weight: 700; color: var(--text-dim); }
+  #setup input {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--glass-border-dim); background: rgba(0,0,0,.25);
+    color: #fff; font-family: var(--font); font-size: 14px;
+  }
+  #setup button {
+    margin-top: 4px; padding: 12px; border: none; border-radius: var(--radius-sm);
+    background: var(--twitch); color: #fff; font-weight: 800; font-size: 14px;
+    cursor: pointer; font-family: var(--font);
+  }
+  #setup .status-line { font-size: 12px; color: var(--text-faint); }
+  #setup a { color: var(--blue); }
+
+  #status-pill {
+    display: none;
+    position: fixed; bottom: 12px; left: 12px;
+    font-size: 12px; color: var(--text-faint);
+    background: rgba(0,0,0,.35); padding: 4px 10px; border-radius: var(--radius-pill);
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="status-pill">alertes: initialisation…</div>
+
+<script>
+/* =========================================================================
+   Liquid Glass — Twitch EventSub alert box (follow / sub / gift / raid)
+
+   Twitch OAuth requires an http(s) redirect URL — file:// does not work.
+   Serve this folder locally with `python3 -m http.server` (NOT `npx serve`,
+   which rewrites URLs and breaks the OAuth redirect match) and use that
+   http://localhost:PORT/alerts/index.html URL both in OBS and as the OAuth
+   Redirect URL in your Twitch dev app. Full steps in README.md.
+
+   ?debug=1 shows the connection-status pill (bottom-left) — leave it off for
+   the URL you actually use on stream, turn it on only while setting up.
+   ========================================================================= */
+
+const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
+const statusPill = document.getElementById('status-pill');
+if (DEBUG) statusPill.style.display = 'block';
+const setStatus = t => statusPill.textContent = 'alertes: ' + t;
+
+const LS_CLIENT_ID = 'lg_alerts_client_id';
+const LS_TOKEN = 'lg_alerts_token';
+
+function currentRedirectUri() {
+  return location.origin + location.pathname;
+}
+
+function showSetup(message) {
+  setStatus('en attente de configuration');
+  document.getElementById('stage').innerHTML = `
+    <div id="setup" class="glass glass-strong">
+      <h1>Configuration des alertes Twitch</h1>
+      <p>1. Crée une application sur <a href="https://dev.twitch.tv/console/apps" target="_blank">dev.twitch.tv/console/apps</a>.<br>
+      2. Ajoute exactement cette URL comme <b>OAuth Redirect URL</b> :<br>
+      <code style="word-break:break-all">${currentRedirectUri()}</code></p>
+      <label>Client ID</label>
+      <input id="clientIdInput" placeholder="Client ID de ton app Twitch" value="${localStorage.getItem(LS_CLIENT_ID) || ''}">
+      <button id="connectBtn">Se connecter avec Twitch</button>
+      <div class="status-line">${message || ''}</div>
+    </div>`;
+  document.getElementById('connectBtn').addEventListener('click', () => {
+    const clientId = document.getElementById('clientIdInput').value.trim();
+    if (!clientId) return;
+    localStorage.setItem(LS_CLIENT_ID, clientId);
+    const scopes = ['moderator:read:followers', 'channel:read:subscriptions', 'bits:read'].join(' ');
+    const url = new URL('https://id.twitch.tv/oauth2/authorize');
+    url.searchParams.set('client_id', clientId);
+    url.searchParams.set('redirect_uri', currentRedirectUri());
+    url.searchParams.set('response_type', 'token');
+    url.searchParams.set('scope', scopes);
+    location.href = url.toString();
+  });
+}
+
+/* pick up the access_token (or an error) from the OAuth redirect fragment */
+function consumeHash() {
+  if (!location.hash) return null;
+  const p = new URLSearchParams(location.hash.slice(1));
+  const result = p.get('access_token')
+    ? { token: p.get('access_token') }
+    : p.get('error')
+      ? { error: p.get('error'), description: p.get('error_description') || '' }
+      : null;
+  if (result) history.replaceState(null, '', location.pathname + location.search);
+  return result;
+}
+const hashResult = consumeHash();
+if (hashResult && hashResult.token) {
+  localStorage.setItem(LS_TOKEN, hashResult.token);
+}
+
+/* ../config.js wins over localStorage: it lets you skip the sign-in screen
+   entirely, and it is the only source the webcam frame can read when that
+   source is added to OBS as a local file. */
+const CFG = window.LG_CONFIG || {};
+function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+const clientId = CFG.clientId || stored(LS_CLIENT_ID);
+const token = CFG.token || stored(LS_TOKEN);
+
+if (hashResult && hashResult.error) {
+  console.error('Twitch OAuth error:', hashResult.error, hashResult.description);
+  showSetup(`Échec de connexion Twitch — ${hashResult.error}: ${decodeURIComponent(hashResult.description || '').replace(/\+/g, ' ')}. Vérifie que l'URL de redirection ci-dessus est EXACTEMENT celle enregistrée dans ton app Twitch.`);
+} else if (!clientId || !token) {
+  showSetup();
+} else {
+  init(clientId, token);
+}
+
+async function helix(path, opts) {
+  let res;
+  try {
+    res = await fetch('https://api.twitch.tv/helix' + path, {
+      ...opts,
+      headers: {
+        'Client-Id': clientId,
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        ...(opts && opts.headers)
+      }
+    });
+  } catch (e) {
+    throw new Error(`Requête réseau échouée vers ${path} (${e.message}). Es-tu bien servi en http(s), et connecté à internet ?`);
+  }
+  if (res.status === 401) {
+    localStorage.removeItem(LS_TOKEN);
+    throw new Error('Session expirée ou token invalide — reconnecte-toi.');
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`Helix ${path} → ${res.status} ${body.message || res.statusText}`);
+  }
+  return body;
+}
+
+async function init(clientId, token) {
+  setStatus('vérification du token…');
+  let me;
+  try {
+    const users = await helix('/users');
+    me = users.data && users.data[0];
+  } catch (e) {
+    console.error(e);
+    showSetup(String(e.message || e));
+    return;
+  }
+  if (!me) { showSetup('Impossible de récupérer le compte Twitch (réponse vide).'); return; }
+
+  setStatus(`connecté en tant que ${me.display_name} — ouverture du flux…`);
+  connectEventSub(me.id);
+}
+
+const SUB_TYPES = [
+  { type: 'channel.follow', version: '2', cond: id => ({ broadcaster_user_id: id, moderator_user_id: id }) },
+  { type: 'channel.subscribe', version: '1', cond: id => ({ broadcaster_user_id: id }) },
+  { type: 'channel.subscription.gift', version: '1', cond: id => ({ broadcaster_user_id: id }) },
+  { type: 'channel.subscription.message', version: '1', cond: id => ({ broadcaster_user_id: id }) },
+  { type: 'channel.raid', version: '1', cond: id => ({ to_broadcaster_user_id: id }) },
+  { type: 'channel.cheer', version: '1', cond: id => ({ broadcaster_user_id: id }) },
+];
+
+function connectEventSub(broadcasterId) {
+  const ws = new WebSocket('wss://eventsub.wss.twitch.tv/ws');
+
+  ws.onerror = () => console.error('EventSub WebSocket error — voir l\'onglet Réseau pour plus de détails.');
+
+  ws.onmessage = async (evt) => {
+    const msg = JSON.parse(evt.data);
+    const type = msg.metadata && msg.metadata.message_type;
+
+    if (type === 'session_welcome') {
+      const sessionId = msg.payload.session.id;
+      setStatus('abonnement aux événements…');
+      let ok = 0;
+      const failures = [];
+      for (const sub of SUB_TYPES) {
+        try {
+          await helix('/eventsub/subscriptions', {
+            method: 'POST',
+            body: JSON.stringify({
+              type: sub.type,
+              version: sub.version,
+              condition: sub.cond(broadcasterId),
+              transport: { method: 'websocket', session_id: sessionId }
+            })
+          });
+          ok++;
+        } catch (e) {
+          failures.push(sub.type);
+          console.warn(`Abonnement ${sub.type} refusé:`, e.message || e);
+        }
+      }
+      if (ok === 0) {
+        setStatus(`échec — aucun abonnement accepté (vérifie les scopes). Détails dans la console (F12).`);
+      } else if (failures.length) {
+        setStatus(`en écoute ✓ (${ok}/${SUB_TYPES.length} — ${failures.join(', ')} indisponible(s))`);
+      } else {
+        setStatus('en écoute ✓');
+      }
+    }
+
+    if (type === 'notification') {
+      handleEvent(msg.payload.subscription.type, msg.payload.event);
+    }
+
+    if (type === 'session_reconnect') {
+      ws.close();
+      connectEventSub(broadcasterId);
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus('connexion perdue — reconnexion…');
+    setTimeout(() => connectEventSub(broadcasterId), 3000);
+  };
+}
+
+/* ---------------- alert rendering + queue ------------------------------ */
+const queue = [];
+let playing = false;
+
+function handleEvent(type, e) {
+  recordLatest(type, e);
+  const spec = buildAlert(type, e);
+  if (!spec) return;
+  queue.push(spec);
+  if (!playing) playNext();
+}
+
+/* Publish the latest follower/subscriber so other overlays served from the
+   same origin (the webcam frame) can display them. Helix has no "most
+   recent subscriber" endpoint, so the sub name can only come from a live
+   event — this is that bridge. */
+function recordLatest(type, e) {
+  try {
+    if (type === 'channel.follow' && e.user_name) {
+      localStorage.setItem('lg_last_follower', e.user_name);
+    }
+    if ((type === 'channel.subscribe' || type === 'channel.subscription.message') && e.user_name) {
+      localStorage.setItem('lg_last_sub', e.user_name);
+    }
+    if (type === 'channel.subscription.gift' && !e.is_anonymous && e.user_name) {
+      localStorage.setItem('lg_last_sub', e.user_name);
+    }
+  } catch (err) { /* localStorage indisponible — non bloquant */ }
+}
+
+function buildAlert(type, e) {
+  switch (type) {
+    case 'channel.follow':
+      return { icon: '✨', kicker: 'Nouveau follow', title: `<b>${e.user_name}</b> vient de follow !`, sub: '' };
+    case 'channel.subscribe':
+      return { icon: '🎉', kicker: 'Nouvel abonné', title: `<b>${e.user_name}</b> s'est abonné !`, sub: `Tier ${(e.tier / 1000).toFixed(0)}` };
+    case 'channel.subscription.gift':
+      return { icon: '🎁', kicker: 'Sub cadeau', title: `<b>${e.is_anonymous ? 'Quelqu\'un' : e.user_name}</b> a offert ${e.total} sub(s) !`, sub: `Tier ${(e.tier / 1000).toFixed(0)}` };
+    case 'channel.subscription.message':
+      return { icon: '💜', kicker: 'Resub', title: `<b>${e.user_name}</b> s'est réabonné (${e.cumulative_months} mois) !`, sub: e.message && e.message.text || '' };
+    case 'channel.raid':
+      return { icon: '⚡', kicker: 'Raid', title: `<b>${e.from_broadcaster_user_name}</b> raide avec ${e.viewers} viewers !`, sub: '' };
+    case 'channel.cheer':
+      return { icon: '💎', kicker: 'Cheer', title: `<b>${e.is_anonymous ? 'Quelqu\'un' : e.user_name}</b> a envoyé ${e.bits} bits !`, sub: e.message || '' };
+    default:
+      return null;
+  }
+}
+
+/* ---------------- manual test trigger -----------------------------------
+   Add ?test=follow (or sub / gift / resub / raid / cheer) to the source URL
+   in OBS to fire one fake alert ~1s after the page loads — no real Twitch
+   event or connection required. Remove the param again afterwards. */
+const TEST_EVENTS = {
+  follow: ['channel.follow', { user_name: 'TestViewer' }],
+  sub:    ['channel.subscribe', { user_name: 'TestViewer', tier: 1000 }],
+  gift:   ['channel.subscription.gift', { is_anonymous: false, user_name: 'TestViewer', total: 1, tier: 1000 }],
+  resub:  ['channel.subscription.message', { user_name: 'TestViewer', cumulative_months: 6, message: { text: 'Merci pour le stream !' } }],
+  raid:   ['channel.raid', { from_broadcaster_user_name: 'TestStreamer', viewers: 42 }],
+  cheer:  ['channel.cheer', { is_anonymous: false, user_name: 'TestViewer', bits: 100, message: 'Bien joué !' }],
+};
+const testParam = new URLSearchParams(location.search).get('test');
+if (testParam && TEST_EVENTS[testParam]) {
+  const [type, e] = TEST_EVENTS[testParam];
+  setTimeout(() => handleEvent(type, e), 900);
+}
+
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const notes = [660, 880];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + i * 0.12 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.12 + 0.5);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.12);
+      osc.stop(ctx.currentTime + i * 0.12 + 0.5);
+    });
+  } catch (e) {}
+}
+
+function playNext() {
+  const spec = queue.shift();
+  if (!spec) { playing = false; return; }
+  playing = true;
+
+  const stage = document.getElementById('stage');
+  const card = document.createElement('div');
+  card.className = 'alert-card glass glass-strong';
+  card.innerHTML = `
+    <div class="alert-icon">${spec.icon}</div>
+    <div class="alert-text">
+      <div class="alert-kicker">${spec.kicker}</div>
+      <div class="alert-title">${spec.title}</div>
+      ${spec.sub ? `<div class="alert-sub">${spec.sub}</div>` : ''}
+    </div>`;
+  stage.appendChild(card);
+  chime();
+
+  setTimeout(() => {
+    card.classList.add('leaving');
+    card.addEventListener('animationend', () => {
+      card.remove();
+      playNext();
+    }, { once: true });
+  }, 5500);
+}
+</script>
+</body>
+</html>

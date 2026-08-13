@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Chat Overlay — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<script src="../shared/vendor/tmi.min.js"></script>
+<style>
+  body { width: 100vw; height: 100vh; display: flex; align-items: flex-end; }
+
+  /* Le chat n'utilise pas `zoom` : sa hauteur dépend de 100% / 100vh, que le
+     zoom ferait déborder de la source. Les dimensions qui comptent sont donc
+     multipliées explicitement par --scale. */
+  #chat {
+    width: min(94vw, calc(520px * var(--scale)));
+    height: 100%;
+    max-height: 100vh;
+    margin: 0 0 0 calc(24px * var(--scale));
+    padding: calc(14px * var(--scale)) calc(10px * var(--scale));
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: calc(8px * var(--scale));
+    overflow: hidden;
+    /* messages scrolling past the top fade out instead of being cut off */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 14%);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 14%);
+  }
+
+  .msg {
+    display: flex;
+    flex-direction: column;
+    gap: calc(3px * var(--scale));
+    padding: calc(10px * var(--scale)) calc(14px * var(--scale));
+    border-radius: calc(var(--radius-md) * var(--scale));
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border-dim);
+    box-shadow: 0 6px 18px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.25), var(--glass-fringe);
+    animation: rise-in .32s cubic-bezier(.2,.8,.2,1) both;
+    font-size: calc(var(--chat-fontsize, 21px) * var(--scale));
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
+  .msg.leaving { animation: fade-out .35s ease forwards; }
+
+  .msg-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .msg-name {
+    font-weight: 800;
+    letter-spacing: .1px;
+  }
+
+  .msg-body { color: var(--text); font-weight: 500; }
+  .msg-body img.emote { height: 1.5em; vertical-align: middle; margin: 0 1px; }
+
+  .msg.action .msg-body { font-style: italic; opacity: .92; }
+
+  #status {
+    position: fixed;
+    bottom: 10px; left: 10px;
+    font-family: var(--font);
+    font-size: 12px;
+    color: var(--text-faint);
+    background: rgba(0,0,0,.35);
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="chat"></div>
+<div id="status">connexion…</div>
+
+<script>
+/* ---------- config via query string ------------------------------------
+   ?channel=djokoow   nom de la chaîne Twitch (par défaut djokoow)
+   ?limit=60          nombre max de messages gardés en mémoire — les
+                       messages remplissent toute la hauteur du canvas et
+                       s'estompent en haut ; cette limite ne sert qu'à éviter
+                       d'accumuler trop de DOM, augmente-la si ta source est
+                       très haute et que tu vois le haut se couper trop tôt
+   ?fontsize=21       taille du texte en px
+   ?fade=0            secondes avant qu'un message disparaisse (0 = jamais,
+                       les anciens sont juste retirés quand la limite est
+                       dépassée)
+   ?debug=1           affiche un badge de statut de connexion
+-------------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+const CHANNEL = (params.get('channel') || 'djokoow').toLowerCase();
+const LIMIT = parseInt(params.get('limit') || '60', 10);
+const FADE = parseInt(params.get('fade') || '0', 10);
+const DEBUG = params.get('debug') === '1';
+
+document.documentElement.style.setProperty('--chat-fontsize', (params.get('fontsize') || '21') + 'px');
+
+const chatEl = document.getElementById('chat');
+const statusEl = document.getElementById('status');
+if (DEBUG) statusEl.style.display = 'block';
+function setStatus(t) { statusEl.textContent = t; }
+
+const NAME_PALETTE = ['#ff8fb1', '#8fd6ff', '#c8a2ff', '#ffd08a', '#8affc1', '#ff9d8a', '#9ad1ff', '#f2a8ff'];
+function hashColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return NAME_PALETTE[h % NAME_PALETTE.length];
+}
+
+/* ---------- Twitch global + channel badge lookup (public, no auth) ----- */
+const badgeSets = {};
+function ingestBadgeSet(json) {
+  (json.badge_sets ? Object.entries(json.badge_sets) : []).forEach(([type, def]) => {
+    badgeSets[type] = badgeSets[type] || {};
+    Object.entries(def.versions || {}).forEach(([version, v]) => {
+      badgeSets[type][version] = v.image_url_1x;
+    });
+  });
+}
+fetch('https://badges.twitch.tv/v1/badges/global/display')
+  .then(r => r.json()).then(ingestBadgeSet).catch(() => {});
+
+let channelBadgesLoaded = false;
+function ensureChannelBadges(roomId) {
+  if (channelBadgesLoaded || !roomId) return;
+  channelBadgesLoaded = true;
+  fetch(`https://badges.twitch.tv/v1/badges/channels/${roomId}/display`)
+    .then(r => r.json()).then(ingestBadgeSet).catch(() => {});
+}
+
+function badgeChip(type, version) {
+  const url = badgeSets[type] && badgeSets[type][version];
+  if (url) {
+    const img = document.createElement('img');
+    img.src = url; img.alt = type; img.title = type;
+    return img;
+  }
+  const span = document.createElement('span');
+  span.className = 'badge-chip';
+  span.textContent = ({ broadcaster: 'HOST', moderator: 'MOD', vip: 'VIP', subscriber: 'SUB', founder: 'FOUNDER' })[type] || type.toUpperCase();
+  return span;
+}
+
+/* ---------- emote-aware message rendering ------------------------------- */
+function renderBody(message, emotes) {
+  const frag = document.createDocumentFragment();
+  if (!emotes || Object.keys(emotes).length === 0) {
+    frag.appendChild(document.createTextNode(message));
+    return frag;
+  }
+  const ranges = [];
+  Object.entries(emotes).forEach(([id, positions]) => {
+    positions.forEach(pos => {
+      const [start, end] = pos.split('-').map(Number);
+      ranges.push({ id, start, end });
+    });
+  });
+  ranges.sort((a, b) => a.start - b.start);
+
+  let cursor = 0;
+  const chars = Array.from(message);
+  ranges.forEach(({ id, start, end }) => {
+    if (start > cursor) frag.appendChild(document.createTextNode(chars.slice(cursor, start).join('')));
+    const img = document.createElement('img');
+    img.className = 'emote';
+    img.src = `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
+    img.alt = chars.slice(start, end + 1).join('');
+    frag.appendChild(img);
+    cursor = end + 1;
+  });
+  if (cursor < chars.length) frag.appendChild(document.createTextNode(chars.slice(cursor).join('')));
+  return frag;
+}
+
+/* ---------- message lifecycle ------------------------------------------ */
+function addMessage(tags, message, isAction) {
+  ensureChannelBadges(tags['room-id']);
+
+  const el = document.createElement('div');
+  el.className = 'msg glass' + (isAction ? ' action' : '');
+
+  const head = document.createElement('div');
+  head.className = 'msg-head';
+
+  Object.entries(tags.badges || {}).forEach(([type, version]) => head.appendChild(badgeChip(type, version)));
+
+  const name = document.createElement('span');
+  name.className = 'msg-name';
+  name.textContent = tags['display-name'] || tags.username;
+  name.style.color = tags.color || hashColor(tags.username || '');
+  head.appendChild(name);
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.appendChild(renderBody(message, tags.emotes));
+
+  el.appendChild(head);
+  el.appendChild(body);
+  chatEl.appendChild(el);
+
+  if (FADE > 0) {
+    setTimeout(() => removeMessage(el), FADE * 1000);
+  }
+
+  while (chatEl.children.length > LIMIT) {
+    removeMessage(chatEl.firstElementChild, true);
+  }
+}
+
+function removeMessage(el, immediate) {
+  if (!el || el.classList.contains('leaving')) return;
+  if (immediate) { el.remove(); return; }
+  el.classList.add('leaving');
+  el.addEventListener('animationend', () => el.remove(), { once: true });
+}
+
+/* ---------- tmi.js connection (anonymous, read-only) -------------------- */
+const client = new tmi.Client({
+  channels: [CHANNEL]
+});
+
+client.on('connected', () => setStatus(`connecté à #${CHANNEL}`));
+client.on('disconnected', reason => setStatus('déconnecté — reconnexion…'));
+client.on('message', (channel, tags, message, self) => {
+  if (self) return;
+  addMessage(tags, message, tags['message-type'] === 'action');
+});
+
+setStatus(`connexion à #${CHANNEL}…`);
+client.connect().catch(err => setStatus('erreur: ' + err));
+</script>
+</body>
+</html>

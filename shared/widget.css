@@ -1,0 +1,90 @@
+/* =========================================================================
+   Base commune aux widgets autonomes (widgets/*.html).
+
+   Chaque widget est une source OBS indépendante : il se centre dans sa
+   source et réserve la place de son halo, pour que celui-ci ne soit jamais
+   tranché au bord (voir README, section « Pourquoi la source doit être plus
+   grande que le widget »).
+   ========================================================================= */
+
+body {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* marge du halo : les ombres des pastilles portent à ~14 haut / 22 bas /
+     18 côtés, arrondi vers le haut ici. Multipliée par --scale, sinon la
+     réserve devient insuffisante dès qu'on agrandit (le halo grossit avec
+     la pastille). */
+  padding: calc(18px * var(--scale)) calc(24px * var(--scale)) calc(26px * var(--scale));
+}
+
+/* pastille : mêmes métriques que celles du cadre webcam (9px de padding
+   vertical, texte 13px, hauteur ~36px) pour que tous les widgets s'alignent
+   sur la même ligne de base */
+.pill {
+  /* zoom plutôt que transform: il agit sur la mise en page, donc les ombres
+     et les mesures internes restent cohérentes */
+  zoom: var(--scale);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+  max-width: 100%;
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .30),
+    var(--glass-fringe);
+}
+
+.pill .sep {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, .28);
+  flex: none;
+}
+
+.pill .label {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+/* point « en direct » — passe en gris quand Twitch confirme le hors-ligne */
+.live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #ff4b4b;
+  box-shadow: 0 0 10px #ff4b4b;
+  animation: pulse 1.6s ease-in-out infinite;
+  flex: none;
+}
+.live-dot.off {
+  background: rgba(255, 255, 255, .35);
+  box-shadow: none;
+  animation: none;
+}
+
+/* apparition/disparition douce, pour les widgets qui se masquent */
+.fade {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity .4s ease, transform .4s cubic-bezier(.2,.8,.2,1);
+}
+.fade.on {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#debug {
+  display: none;
+  position: fixed; left: 8px; bottom: 8px;
+  font-size: 11px; color: var(--text-faint);
+  background: rgba(0, 0, 0, .5);
+  padding: 3px 9px; border-radius: var(--radius-pill);
+  font-family: var(--font);
+}

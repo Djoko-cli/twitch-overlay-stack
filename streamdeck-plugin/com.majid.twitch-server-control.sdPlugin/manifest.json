@@ -1,0 +1,52 @@
+{
+	"Name": "Twitch Server Control",
+	"Version": "1.0.0.0",
+	"Author": "Majid",
+	"Actions": [
+		{
+			"Name": "Serveur Twitch",
+			"UUID": "com.majid.twitch-server-control.toggle",
+			"Icon": "imgs/actions/toggle/icon",
+			"Tooltip": "Démarre ou arrête server.py — appuie pour basculer. L'icône reflète l'état réel, sondé toutes les 4 secondes.",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/toggle/state-stopped",
+					"TitleAlignment": "bottom",
+					"Title": "Arrêté"
+				},
+				{
+					"Image": "imgs/actions/toggle/state-running",
+					"TitleAlignment": "bottom",
+					"Title": "En route"
+				}
+			]
+		}
+	],
+	"Category": "Twitch Server Control",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Démarre/arrête server.py (la stack d'overlays Twitch) et affiche son état en direct sur le bouton.",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 3,
+	"Software": {
+		"MinimumVersion": "7.1"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "12"
+		},
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "24",
+		"Debug": "enabled"
+	},
+	"UUID": "com.majid.twitch-server-control"
+}

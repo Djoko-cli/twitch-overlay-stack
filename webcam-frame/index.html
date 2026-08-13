@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Cadre Webcam — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../config.js"></script>
+<style>
+  body { width: 100vw; height: 100vh; }
+
+  /* mic level, 0 → 1, driven by requestAnimationFrame; registered so it can
+     be used inside calc() for colors and lengths */
+  @property --mic {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0;
+  }
+
+  /* ---- the frame: a rounded glass ring with a genuinely transparent
+     center (mask xor), so your webcam shows through untouched ---- */
+  #ring {
+    position: absolute;
+    inset: 0;
+    padding: var(--thickness, 16px);
+    border-radius: var(--radius-xl);
+    background: var(--glass-fill-strong);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    box-shadow: 0 0 0 1px var(--glass-border) inset, 0 10px 40px rgba(0,0,0,.35), var(--glass-fringe);
+  }
+
+  /* Wrapper for the travelling specular glint, same language as the
+     transition screens. It holds only the ring, so the sheen-sweep rule
+     that targets `.fringe-spin .glass` can't reach the pills below.
+
+     MUST be absolutely positioned to fill the canvas: .fringe-spin only
+     sets position:relative, and since its sole child (#ring) is itself
+     absolute, the wrapper would otherwise collapse to zero height — which
+     flattens the whole frame into a thin line across the top. */
+  #frame {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-xl);
+  }
+  /* inset pulled to 0 (instead of the shared -2px) so the glint isn't
+     cropped by OBS at the source's outer bounds */
+  #frame.fringe-spin::after { inset: 0; padding: 3px; }
+
+  /* inner glow that rises with mic level — reads as the frame lighting up
+     when you talk */
+  #micGlow {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-xl);
+    pointer-events: none;
+    box-shadow:
+      inset 0 0 calc(16px + var(--mic) * 62px) calc(var(--mic) * 7px)
+      rgba(168, 200, 255, calc(0.06 + var(--mic) * 0.5));
+  }
+
+  /* nameplate — sits just inside the bottom edge of the ring (kept fully
+     inside the canvas so OBS doesn't crop it — a source's bounds clip
+     anything positioned outside them) */
+  #plate {
+    position: absolute;
+    left: 50%;
+    bottom: calc(var(--thickness, 16px) + 10px);
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 20px;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+    max-width: calc(100% - var(--thickness, 16px) * 2 - 24px);
+  }
+
+  #plate .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #ff4b4b;
+    box-shadow: 0 0 10px #ff4b4b;
+    animation: pulse 1.6s ease-in-out infinite;
+    flex: none;
+  }
+  /* channel confirmed offline by Twitch — stop implying a live signal */
+  #plate .dot.off {
+    background: rgba(255, 255, 255, 0.35);
+    box-shadow: none;
+    animation: none;
+  }
+
+  #plate .name { font-weight: 800; font-size: 15px; }
+  #plate .sep { width: 1px; height: 14px; background: rgba(255,255,255,.28); flex: none; }
+  #plate .game {
+    font-size: 13px; color: var(--text-dim); font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* bottom-left info bar — same baseline as the nameplate, inset by the
+     frame thickness so it clears the ring's rounded corner */
+  #infobar {
+    position: absolute;
+    left: calc(var(--thickness, 16px) + 12px);
+    bottom: calc(var(--thickness, 16px) + 10px);
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px;
+    border-radius: var(--radius-pill);
+    font-size: 13px; font-weight: 700;
+    white-space: nowrap;
+  }
+  #infobar .sep { width: 1px; height: 12px; background: rgba(255,255,255,.28); }
+  #infobar .label { color: var(--text-faint); font-weight: 600; margin-right: -4px; }
+  #infobar .viewers { display: none; align-items: center; gap: 5px; }
+  #infobar .viewers.on { display: inline-flex; }
+
+  /* top-center pill: rotates between latest follower and latest sub */
+  #topPill {
+    position: absolute;
+    left: 50%;
+    top: calc(var(--thickness, 16px) + 10px);
+    transform: translateX(-50%);
+    padding: 8px 18px;
+    border-radius: var(--radius-pill);
+    font-size: 13px; font-weight: 700;
+    white-space: nowrap;
+    display: none;
+    transition: opacity .45s ease;
+    max-width: calc(100% - var(--thickness, 16px) * 2 - 24px);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  #topPill.on { display: block; }
+  #topPill .k { color: var(--text-faint); font-weight: 600; margin-right: 6px; }
+
+  #debug {
+    position: absolute; left: 8px; top: 8px;
+    font-size: 11px; color: var(--text-faint);
+    background: rgba(0,0,0,.45); padding: 3px 8px; border-radius: var(--radius-pill);
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="frame" class="fringe-spin">
+  <div id="ring"></div>
+</div>
+<div id="micGlow"></div>
+
+<div id="topPill" class="glass"><span id="topPillText"></span></div>
+
+<div id="plate" class="glass">
+  <span class="dot"></span>
+  <span class="name" id="nameOut"></span>
+  <span class="sep"></span>
+  <span class="game" id="gameOut"></span>
+</div>
+
+<div id="infobar" class="glass">
+  <span class="label">EN DIRECT</span>
+  <span id="uptimeOut">00:00:00</span>
+  <span class="viewers" id="viewersWrap"><span class="sep"></span><span id="viewersOut">0</span> 👥</span>
+  <span class="sep"></span>
+  <span id="clockOut">--:--</span>
+</div>
+
+<div id="debug"></div>
+
+<script>
+/* ---------- config via query string ------------------------------------
+   ?name=djokoow           pseudo affiché (sinon récupéré depuis Twitch)
+   ?game=Just%20Chatting    force le texte du jeu (sinon récupéré depuis Twitch)
+   ?thickness=16            épaisseur du cadre en px
+   ?start=2026-08-09T20:00  début du chrono (sinon l'heure réelle de début de
+                             stream renvoyée par Twitch, sinon chargement page)
+   ?live=0                  désactive toute requête vers l'API Twitch
+   ?mic=0                   désactive la réaction au micro
+   ?micgain=1               sensibilité du micro (0.5 = moins sensible, 2 = plus)
+   ?debug=1                 affiche l'état des connexions en haut à gauche
+-------------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+const DEBUG = params.get('debug') === '1';
+
+document.documentElement.style.setProperty('--thickness', (params.get('thickness') || '16') + 'px');
+
+const debugEl = document.getElementById('debug');
+if (DEBUG) debugEl.style.display = 'block';
+const dbg = {};
+function setDbg(k, v) { dbg[k] = v; debugEl.textContent = Object.entries(dbg).map(([a, b]) => `${a}: ${b}`).join('  ·  '); }
+
+/* fallbacks — used immediately, then overwritten by live data if available */
+document.getElementById('nameOut').textContent = params.get('name') || 'djokoow';
+document.getElementById('gameOut').textContent = params.get('game') || 'Just Chatting';
+
+/* Uptime state.
+   - forcedStart : ?start=… wins over everything.
+   - liveSince   : real started_at from Twitch; null while offline.
+   - liveKnown   : true once Twitch has actually answered. Until then (or
+                   with no token at all) we fall back to counting from page
+                   load, which is only ever an approximation. */
+const forcedStart = params.get('start') ? new Date(params.get('start')) : null;
+const pageLoad = new Date();
+let liveSince = null;
+let liveKnown = false;
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function formatDuration(ms) {
+  const d = Math.max(0, ms);
+  return `${pad(Math.floor(d / 3600000))}:${pad(Math.floor((d % 3600000) / 60000))}:${pad(Math.floor((d % 60000) / 1000))}`;
+}
+
+function tick() {
+  const now = new Date();
+  document.getElementById('clockOut').textContent = pad(now.getHours()) + ':' + pad(now.getMinutes());
+
+  const labelEl = document.querySelector('#infobar .label');
+  const uptimeEl = document.getElementById('uptimeOut');
+  const dotEl = document.querySelector('#plate .dot');
+
+  if (forcedStart) {
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = formatDuration(now - forcedStart);
+    dotEl.classList.remove('off');
+    return;
+  }
+
+  if (liveKnown && liveSince) {
+    /* recomputed from the absolute start each second, so it can never drift
+       away from the real stream duration */
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = formatDuration(now - liveSince);
+    dotEl.classList.remove('off');
+  } else if (liveKnown) {
+    /* Twitch answered and says the channel is offline — don't invent a
+       running counter */
+    labelEl.textContent = 'HORS LIGNE';
+    uptimeEl.textContent = '--:--:--';
+    dotEl.classList.add('off');
+  } else {
+    /* no token / no answer yet: approximate from page load */
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = formatDuration(now - pageLoad);
+    dotEl.classList.remove('off');
+  }
+}
+tick();
+setInterval(tick, 1000);
+
+/* =======================================================================
+   Live Twitch data.
+
+   Credentials come from ../config.js first — that file is loaded by every
+   page regardless of origin, so it works even when this source is added to
+   OBS as a local file. localStorage (written by the alerts overlay when you
+   sign in) is only the fallback, and it is per-origin: it is visible here
+   ONLY if this page is served from the same origin as the alerts overlay.
+
+   With neither, the overlay simply keeps the query-string values.
+   ======================================================================= */
+const LS_CLIENT_ID = 'lg_alerts_client_id';
+const LS_TOKEN = 'lg_alerts_token';
+const LS_LAST_FOLLOW = 'lg_last_follower';
+const LS_LAST_SUB = 'lg_last_sub';
+
+const CFG = window.LG_CONFIG || {};
+function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+const clientId = CFG.clientId || stored(LS_CLIENT_ID);
+const token = CFG.token || stored(LS_TOKEN);
+const credSource = CFG.token ? 'config.js' : (stored(LS_TOKEN) ? 'localStorage' : 'aucun');
+const LIVE = params.get('live') !== '0' && clientId && token;
+
+async function helix(path) {
+  const res = await fetch('https://api.twitch.tv/helix' + path, {
+    headers: { 'Client-Id': clientId, 'Authorization': 'Bearer ' + token }
+  });
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.json();
+}
+
+let broadcasterId = null;
+
+async function refreshLive() {
+  try {
+    if (!broadcasterId) {
+      const me = await helix('/users');
+      broadcasterId = me.data && me.data[0] && me.data[0].id;
+      if (!broadcasterId) throw new Error('compte introuvable');
+      if (!params.get('name')) {
+        document.getElementById('nameOut').textContent = me.data[0].display_name;
+      }
+    }
+
+    /* stream info: viewers + real start time (only present when live) */
+    const streams = await helix('/streams?user_id=' + broadcasterId);
+    const live = streams.data && streams.data[0];
+    const viewersWrap = document.getElementById('viewersWrap');
+    if (live) {
+      document.getElementById('viewersOut').textContent = live.viewer_count.toLocaleString('fr-FR');
+      viewersWrap.classList.add('on');
+      liveSince = new Date(live.started_at);
+    } else {
+      viewersWrap.classList.remove('on');
+      liveSince = null;
+    }
+    liveKnown = true;
+    tick();   // reflect the corrected duration immediately, not a second later
+
+    /* channel info: game + title, available even while offline */
+    if (!params.get('game')) {
+      const ch = await helix('/channels?broadcaster_id=' + broadcasterId);
+      const info = ch.data && ch.data[0];
+      if (info && info.game_name) document.getElementById('gameOut').textContent = info.game_name;
+    }
+
+    /* latest follower (needs the moderator:read:followers scope the alerts
+       overlay already requested) */
+    try {
+      const f = await helix(`/channels/followers?broadcaster_id=${broadcasterId}&first=1`);
+      const latest = f.data && f.data[0];
+      if (latest) localStorage.setItem(LS_LAST_FOLLOW, latest.user_name);
+    } catch (e) { /* scope absent — on garde la dernière valeur connue */ }
+
+    setDbg('twitch', 'ok (' + credSource + ')');
+  } catch (e) {
+    console.warn('Twitch:', e.message);
+    setDbg('twitch', 'erreur — ' + e.message);
+  }
+}
+
+if (LIVE) {
+  setDbg('twitch', 'connexion… (' + credSource + ')');
+  refreshLive();
+  setInterval(refreshLive, 45000);
+} else if (DEBUG) {
+  setDbg('twitch', params.get('live') === '0'
+    ? 'désactivé'
+    : (window.LG_CONFIG ? 'config.js chargé mais token vide' : 'config.js non chargé + pas de token'));
+}
+
+/* ---- rotating top pill: latest follower / latest sub -------------------
+   The sub value is written by the alerts overlay when a sub event fires
+   (Helix has no "most recent subscriber" endpoint), so it appears once the
+   first sub of the session comes in. Same-origin localStorage bridge. */
+const topPill = document.getElementById('topPill');
+const topPillText = document.getElementById('topPillText');
+let pillIndex = 0;
+
+function pillEntries() {
+  const out = [];
+  const f = stored(LS_LAST_FOLLOW);
+  const s = stored(LS_LAST_SUB);
+  if (f) out.push(['Dernier follow', f]);
+  if (s) out.push(['Dernier sub', s]);
+  return out;
+}
+
+function rotatePill() {
+  const entries = pillEntries();
+  if (!entries.length) { topPill.classList.remove('on'); return; }
+  topPill.classList.add('on');
+
+  pillIndex = pillIndex % entries.length;
+  const [k, v] = entries[pillIndex];
+
+  topPill.style.opacity = '0';
+  setTimeout(() => {
+    topPillText.innerHTML = `<span class="k">${k}</span>${v}`;
+    topPill.style.opacity = '1';
+  }, 450);
+
+  pillIndex++;
+}
+rotatePill();
+setInterval(rotatePill, 7000);
+
+/* =======================================================================
+   Mic reactivity — OBS browser sources deny getUserMedia by default. To
+   allow it, launch OBS once with the flag documented in README.md. If the
+   request fails the overlay simply stays static; nothing breaks.
+   ======================================================================= */
+async function initMic() {
+  if (params.get('mic') === '0') { setDbg('micro', 'désactivé'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setDbg('micro', 'indisponible');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.78;
+    source.connect(analyser);
+
+    const buf = new Uint8Array(analyser.fftSize);
+    const gain = parseFloat(params.get('micgain') || '1');
+    const FLOOR = 0.012;   // ignore room tone
+    const CEIL = 0.16;     // rms considered "full"
+
+    function frame() {
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      const level = Math.min(1, Math.max(0, ((rms - FLOOR) / (CEIL - FLOOR)) * gain));
+      document.documentElement.style.setProperty('--mic', level.toFixed(3));
+      requestAnimationFrame(frame);
+    }
+    frame();
+    setDbg('micro', 'actif');
+  } catch (e) {
+    console.warn('Micro indisponible:', e.name, e.message);
+    setDbg('micro', 'refusé (' + e.name + ')');
+  }
+}
+initMic();
+</script>
+</body>
+</html>

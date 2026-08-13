@@ -1,0 +1,9 @@
+config.js
+.DS_Store
+.timer-state.json
+.server.pid
+.server.log
+bin/*.app
+streamdeck-plugin/node_modules
+streamdeck-plugin/*.streamDeckPlugin
+STINGER.mov

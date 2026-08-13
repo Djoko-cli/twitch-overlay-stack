@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Dernier follow / sub — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<link rel="stylesheet" href="../shared/widget.css">
+<script src="../config.js"></script>
+<script src="../shared/scale.js"></script>
+<style>
+  #pill { transition: opacity .45s ease, transform .45s cubic-bezier(.2,.8,.2,1); }
+  .k { color: var(--text-faint); font-weight: 600; }
+  .v { font-weight: 800; }
+</style>
+</head>
+<body>
+
+<div id="pill" class="pill glass fade"><span id="text"></span></div>
+<div id="debug"></div>
+
+<script src="../shared/widget.js"></script>
+<script src="../shared/twitch-live.js"></script>
+<script>
+/* ---------- paramètres --------------------------------------------------
+   ?show=both     both (défaut) | follow | sub
+   ?rotate=7      secondes entre deux alternances quand les deux sont affichés
+   ?anchor=center position dans la source
+   ?debug=1       badge d'état
+
+   Le dernier follower vient de l'API. Le dernier sub ne peut PAS en venir
+   (Twitch n'expose aucun endpoint « abonné le plus récent ») : il est écrit
+   par l'overlay d'alertes quand un sub arrive, et apparaît donc à partir du
+   premier sub de la session.
+------------------------------------------------------------------------- */
+const P = Widget.params;
+const SHOW = (P.get('show') || 'both').toLowerCase();
+const ROTATE = Math.max(2, parseInt(P.get('rotate') || '7', 10)) * 1000;
+
+const pill = document.getElementById('pill');
+const textEl = document.getElementById('text');
+let index = 0;
+
+function entries(s) {
+  const out = [];
+  if (SHOW !== 'sub' && s.lastFollower) out.push(['Dernier follow', s.lastFollower]);
+  if (SHOW !== 'follow' && s.lastSub) out.push(['Dernier sub', s.lastSub]);
+  return out;
+}
+
+function rotate() {
+  const list = entries(TwitchLive.state);
+  if (!list.length) { pill.classList.remove('on'); return; }
+
+  index = index % list.length;
+  const [key, value] = list[index];
+  index++;
+
+  const paint = () => {
+    textEl.innerHTML = '<span class="k">' + key + '</span> <span class="v"></span>';
+    /* textContent, pas innerHTML : un pseudo est une donnée externe et n'a
+       aucune raison d'être interprétée comme du HTML */
+    textEl.querySelector('.v').textContent = value;
+    pill.classList.add('on');
+  };
+
+  if (pill.classList.contains('on') && list.length > 1) {
+    pill.style.opacity = '0';
+    setTimeout(() => { paint(); pill.style.opacity = ''; }, 420);
+  } else {
+    paint();
+  }
+}
+
+TwitchLive.onUpdate(s => {
+  rotate();
+  Widget.setDebug('twitch', !s.enabled ? 'pas de token'
+    : s.error ? 'erreur — ' + s.error
+    : s.ready ? 'ok (' + s.credSource + ')'
+    : 'connexion…');
+});
+
+setInterval(rotate, ROTATE);
+TwitchLive.start();
+</script>
+</body>
+</html>

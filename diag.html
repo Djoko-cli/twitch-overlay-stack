@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Diagnostic — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="config.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 24px;
+    background: #0b0713; color: #fff;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: rgba(255,255,255,.6); margin: 0 0 20px; font-size: 13px; }
+  .row {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 12px 14px; margin-bottom: 8px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.1);
+  }
+  .row .icon { font-size: 17px; line-height: 1.3; flex: none; }
+  .row .body { flex: 1; min-width: 0; }
+  .row .title { font-weight: 700; }
+  .row .detail {
+    color: rgba(255,255,255,.62); font-size: 12.5px; margin-top: 3px;
+    word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .row.ok    { border-color: rgba(110,255,165,.35); background: rgba(110,255,165,.07); }
+  .row.bad   { border-color: rgba(255,90,120,.4);  background: rgba(255,90,120,.08); }
+  .row.warn  { border-color: rgba(255,200,90,.4);  background: rgba(255,200,90,.08); }
+  .fix {
+    margin-top: 8px; padding: 10px 12px;
+    background: rgba(0,0,0,.35); border-radius: 9px;
+    font-size: 12.5px; color: rgba(255,255,255,.9);
+  }
+  .fix b { color: #ffd08a; }
+  code {
+    background: rgba(255,255,255,.12); padding: 1px 5px; border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  }
+  button {
+    margin-top: 16px; padding: 10px 18px; border: none; border-radius: 10px;
+    background: #9146FF; color: #fff; font-weight: 700; font-size: 13.5px;
+    cursor: pointer; font-family: inherit;
+  }
+</style>
+</head>
+<body>
+
+<h1>Diagnostic des overlays</h1>
+<p class="lede">Ouvre cette page <b>exactement comme tu ouvres tes sources dans OBS</b> (clic droit sur une source → Interagir, ou la même URL dans ton navigateur) pour voir ce que voient réellement les overlays.</p>
+
+<div id="out"></div>
+<button id="again">Relancer le diagnostic</button>
+
+<script>
+const out = document.getElementById('out');
+
+function row(state, icon, title, detail, fix) {
+  const el = document.createElement('div');
+  el.className = 'row ' + state;
+  el.innerHTML = `
+    <div class="icon">${icon}</div>
+    <div class="body">
+      <div class="title">${title}</div>
+      ${detail ? `<div class="detail">${detail}</div>` : ''}
+      ${fix ? `<div class="fix">${fix}</div>` : ''}
+    </div>`;
+  out.appendChild(el);
+  return el;
+}
+
+function heading(text) {
+  const el = document.createElement('h2');
+  el.textContent = text;
+  el.style.cssText = 'font-size:15px;margin:26px 0 10px;color:rgba(255,255,255,.75);letter-spacing:.3px';
+  out.appendChild(el);
+}
+
+/* Renders a secret masked, with Copier / Afficher — so this page stays safe
+   to open while live. */
+function secretBox(container, value, label) {
+  const box = document.createElement('div');
+  box.className = 'fix';
+  box.innerHTML = `
+    ${label}
+    <div style="margin-top:8px"><code class="masked" style="user-select:all">${'•'.repeat(28)}</code></div>
+    <button class="cp" style="margin:8px 6px 0 0;padding:6px 12px;font-size:12px">Copier</button>
+    <button class="sh" style="margin:8px 0 0;padding:6px 12px;font-size:12px;background:rgba(255,255,255,.14)">Afficher</button>
+    <div style="margin-top:8px;color:rgba(255,180,180,.9)">⚠️ Secret : masqué par défaut, « Copier » marche sans l'afficher.</div>`;
+  container.querySelector('.body').appendChild(box);
+
+  const codeEl = box.querySelector('.masked');
+  box.querySelector('.cp').addEventListener('click', (e) => {
+    navigator.clipboard.writeText(value).then(
+      () => { e.target.textContent = 'Copié ✓'; },
+      () => { e.target.textContent = 'Utilise « Afficher »'; }
+    );
+  });
+  box.querySelector('.sh').addEventListener('click', (e) => {
+    const hidden = codeEl.textContent.startsWith('•');
+    codeEl.textContent = hidden ? value : '•'.repeat(28);
+    e.target.textContent = hidden ? 'Masquer' : 'Afficher';
+  });
+}
+
+/* ---------- PKCE helpers (same flow as music/index.html) ---------------- */
+function randomVerifier(len = 64) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  return Array.from(crypto.getRandomValues(new Uint8Array(len)), b => chars[b % chars.length]).join('');
+}
+function b64url(bytes) {
+  return btoa(String.fromCharCode.apply(null, bytes))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function challengeFor(verifier) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return b64url(new Uint8Array(d));
+}
+function spotifyRedirectUri() {
+  return location.origin.replace('//localhost', '//127.0.0.1') + location.pathname;
+}
+async function spotifyToken(body) {
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body).toString()
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error_description || json.error || 'HTTP ' + res.status);
+  return json;
+}
+
+async function run() {
+  out.innerHTML = '';
+  /* Spotify's redirect lands back here, so handle it before anything else */
+  await consumeSpotifyRedirect();
+  heading('Twitch');
+  await twitchSection();
+  heading('Spotify');
+  await spotifySection();
+}
+
+async function twitchSection() {
+  /* ---- 1. how is this page loaded? ---------------------------------- */
+  const isFile = location.protocol === 'file:';
+  if (isFile) {
+    row('bad', '✕', 'Cette page est ouverte en fichier local (file://)',
+      location.href,
+      `C\'est <b>la cause n°1</b> du chrono qui ne se synchronise pas. Le token Twitch est stocké par origine : une source <code>file://</code> ne voit jamais le token enregistré sur <code>http://localhost:5500</code>.<br><br>
+       Dans OBS : propriétés de la source → <b>décoche "Fichier local"</b> → colle l\'URL <code>http://localhost:5500/webcam-frame/index.html</code>.`);
+  } else {
+    row('ok', '✓', 'Page servie en HTTP — bon point de départ', location.origin);
+  }
+
+  /* ---- 2. is the token visible from THIS origin? --------------------- */
+  const CFG = window.LG_CONFIG || {};
+  if (!window.LG_CONFIG) {
+    row('warn', '!', 'config.js non chargé depuis cette page',
+      'window.LG_CONFIG est indéfini',
+      `Vérifie que <code>config.js</code> est bien à la racine du dossier <code>Twitch/</code>, à côté de <code>diag.html</code>.`);
+  } else {
+    row('ok', '✓', 'config.js chargé',
+      `clientId : ${CFG.clientId ? CFG.clientId.slice(0, 8) + '…' : '(vide)'}  ·  token : ${CFG.token ? 'renseigné' : '(vide)'}`);
+  }
+
+  let clientId = null, token = null;
+  try {
+    clientId = CFG.clientId || localStorage.getItem('lg_alerts_client_id');
+    token = CFG.token || localStorage.getItem('lg_alerts_token');
+  } catch (e) {
+    clientId = CFG.clientId || null;
+    token = CFG.token || null;
+    row('warn', '!', 'localStorage inaccessible', e.message);
+  }
+
+  if (!clientId || !token) {
+    row('bad', '✕', 'Aucun token Twitch visible depuis cette origine',
+      `origine actuelle : ${location.origin}`,
+      `Le token existe peut-être, mais <b>pas sur cette origine</b>. Il a été enregistré là où tu as fait "Se connecter avec Twitch" (l\'overlay d\'alertes).<br><br>
+       Vérifie que <b>les alertes ET le cadre webcam utilisent exactement la même origine</b> — même <code>http://localhost:5500</code>, même port. Puis refais la connexion depuis l\'overlay d\'alertes sur cette origine.`);
+    row('warn', 'ℹ', 'Diagnostic interrompu', 'Sans token, impossible de tester l\'API Twitch.');
+    return;
+  }
+  row('ok', '✓', 'Token Twitch trouvé sur cette origine',
+    `client_id : ${clientId.slice(0, 8)}…  ·  token : ${token.slice(0, 6)}…`,
+    `Pour que <b>toutes</b> les sources y aient accès (même en <code>file://</code>), colle ce token dans <code>config.js</code> :
+     <div style="margin-top:8px"><code id="tok" style="user-select:all">••••••••••••••••••••••••••••••</code>
+     <button id="copyTok" style="margin:6px 4px 0 0;padding:6px 12px;font-size:12px">Copier</button>
+     <button id="showTok" style="margin:6px 0 0;padding:6px 12px;font-size:12px;background:rgba(255,255,255,.14)">Afficher</button></div>
+     <div style="margin-top:8px;color:rgba(255,180,180,.9)">⚠️ Masqué par défaut pour que cette page reste sûre à ouvrir en direct. "Copier" fonctionne sans l\'afficher.</div>`);
+
+  const copyBtn = document.getElementById('copyTok');
+  if (copyBtn) copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(token).then(
+      () => { copyBtn.textContent = 'Copié ✓'; },
+      () => { copyBtn.textContent = 'Échec — utilise "Afficher"'; }
+    );
+  });
+  const showBtn = document.getElementById('showTok');
+  if (showBtn) showBtn.addEventListener('click', () => {
+    const tokEl = document.getElementById('tok');
+    const hidden = tokEl.textContent.startsWith('•');
+    tokEl.textContent = hidden ? token : '••••••••••••••••••••••••••••••';
+    showBtn.textContent = hidden ? 'Masquer' : 'Afficher';
+  });
+
+  /* ---- 3. is the token still valid? ---------------------------------- */
+  let userId = null, login = null;
+  try {
+    const res = await fetch('https://api.twitch.tv/helix/users', {
+      headers: { 'Client-Id': clientId, 'Authorization': 'Bearer ' + token }
+    });
+    if (res.status === 401) {
+      row('bad', '✕', 'Token expiré ou invalide (401)', 'GET /helix/users → 401',
+        `Rouvre l\'overlay d\'alertes (clic droit → Interagir) et reclique sur <b>"Se connecter avec Twitch"</b>.`);
+      return;
+    }
+    if (!res.ok) {
+      row('bad', '✕', `L\'API Twitch a répondu ${res.status}`, 'GET /helix/users');
+      return;
+    }
+    const data = await res.json();
+    const me = data.data && data.data[0];
+    if (!me) { row('bad', '✕', 'Réponse /users vide'); return; }
+    userId = me.id; login = me.login;
+    row('ok', '✓', `Token valide — connecté en tant que ${me.display_name}`, `user_id : ${me.id}`);
+  } catch (e) {
+    row('bad', '✕', 'Impossible de joindre l\'API Twitch', e.message,
+      `Vérifie ta connexion internet. Si tu es en <code>file://</code>, le navigateur peut aussi bloquer la requête.`);
+    return;
+  }
+
+  /* ---- 4. is the channel actually live right now? -------------------- */
+  try {
+    const res = await fetch('https://api.twitch.tv/helix/streams?user_id=' + userId, {
+      headers: { 'Client-Id': clientId, 'Authorization': 'Bearer ' + token }
+    });
+    const data = await res.json();
+    const live = data.data && data.data[0];
+    if (live) {
+      const started = new Date(live.started_at);
+      const ms = Date.now() - started;
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+      row('ok', '✓', `Stream EN LIGNE depuis ${h}h ${m}m ${s}s`,
+        `started_at : ${live.started_at}  ·  ${live.viewer_count} viewers  ·  ${live.game_name || 'sans jeu'}`,
+        `C\'est exactement la durée que le cadre webcam doit afficher. Si le chrono d\'OBS montre autre chose, c\'est que <b>la source webcam n\'est pas servie depuis cette origine</b>.`);
+    } else {
+      row('warn', '!', 'Twitch dit que la chaîne est HORS LIGNE',
+        `GET /helix/streams?user_id=${userId} → 0 résultat`,
+        `Le cadre webcam affichera <code>HORS LIGNE</code> et <code>--:--:--</code>, c\'est normal et voulu.<br><br>
+         <b>Un chrono qui compte quand même à partir de zéro signifie que la source n\'a pas de token</b> (elle est en <code>file://</code> ou sur un autre port).<br><br>
+         Pour tester la vraie synchro, relance ce diagnostic <b>pendant que tu es en live</b>.`);
+    }
+  } catch (e) {
+    row('bad', '✕', 'Erreur en récupérant l\'état du stream', e.message);
+  }
+
+  /* ---- 5. scopes granted -------------------------------------------- */
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { 'Authorization': 'OAuth ' + token }
+    });
+    const v = await res.json();
+    const scopes = (v.scopes || []);
+    const needed = ['moderator:read:followers', 'channel:read:subscriptions', 'bits:read'];
+    const missing = needed.filter(s => !scopes.includes(s));
+    if (missing.length) {
+      row('warn', '!', 'Permissions incomplètes', `manquant : ${missing.join(', ')}`,
+        `Reconnecte-toi depuis l\'overlay d\'alertes pour accorder les permissions manquantes.`);
+    } else {
+      row('ok', '✓', 'Toutes les permissions nécessaires sont accordées', scopes.join(', '));
+    }
+  } catch (e) { /* non bloquant */ }
+}
+
+/* =======================================================================
+   Spotify — état, récupération du refresh token, et connexion sur place.
+
+   Un refresh token n'existe QUE s'il a été produit par le flux
+   d'autorisation : il n'apparaît nulle part dans le dashboard Spotify.
+   Cette page peut donc lancer le flux elle-même, ce qui évite d'avoir à
+   passer par l'overlay musique juste pour récupérer la valeur.
+   ======================================================================= */
+const SP_LS_CLIENT = 'lg_spotify_client_id';
+const SP_LS_REFRESH = 'lg_spotify_refresh';
+const SP_LS_VERIFIER = 'lg_spotify_verifier_diag';
+
+/* Handles the ?code=… Spotify sends back to this page after authorisation. */
+async function consumeSpotifyRedirect() {
+  const qs = new URLSearchParams(location.search);
+  const code = qs.get('code');
+  const err = qs.get('error');
+  if (!code && !err) return;
+
+  const verifier = sessionStorage.getItem(SP_LS_VERIFIER) || localStorage.getItem(SP_LS_VERIFIER);
+  history.replaceState(null, '', location.pathname);
+
+  if (err) { window.__spotifyFlash = { bad: 'Autorisation refusée : ' + err }; return; }
+  if (!verifier) { window.__spotifyFlash = { bad: 'Session d\'autorisation perdue, relance la connexion.' }; return; }
+
+  const CFG = window.LG_CONFIG || {};
+  const cid = CFG.spotifyClientId || localStorage.getItem(SP_LS_CLIENT);
+  try {
+    const json = await spotifyToken({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: spotifyRedirectUri(),
+      client_id: cid,
+      code_verifier: verifier
+    });
+    if (json.refresh_token) {
+      localStorage.setItem(SP_LS_REFRESH, json.refresh_token);
+      window.__spotifyFlash = { ok: json.refresh_token };
+    }
+  } catch (e) {
+    window.__spotifyFlash = { bad: 'Échange du code échoué : ' + e.message };
+  }
+}
+
+async function startSpotifyAuth(cid) {
+  localStorage.setItem(SP_LS_CLIENT, cid);
+  const verifier = randomVerifier();
+  sessionStorage.setItem(SP_LS_VERIFIER, verifier);
+  localStorage.setItem(SP_LS_VERIFIER, verifier);   // survit si OBS recharge la page
+  const challenge = await challengeFor(verifier);
+
+  const url = new URL('https://accounts.spotify.com/authorize');
+  url.searchParams.set('client_id', cid);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('redirect_uri', spotifyRedirectUri());
+  url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('code_challenge', challenge);
+  url.searchParams.set('scope', 'user-read-currently-playing user-read-playback-state');
+  location.href = url.toString();
+}
+
+function connectButton(container, cid, label) {
+  const box = document.createElement('div');
+  box.className = 'fix';
+  box.innerHTML = `
+    ${label}
+    <div style="margin-top:8px">
+      <input class="cid" placeholder="Client ID Spotify" value="${cid || ''}"
+        style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.35);color:#fff;font-family:inherit;font-size:12.5px">
+    </div>
+    <button class="go" style="margin-top:8px;padding:8px 14px;font-size:12.5px;background:#1DB954">Se connecter à Spotify</button>
+    <div style="margin-top:8px;color:rgba(255,255,255,.6)">
+      Ajoute d'abord <code>${spotifyRedirectUri()}</code> comme Redirect URI dans ton app Spotify.
+    </div>`;
+  container.querySelector('.body').appendChild(box);
+  box.querySelector('.go').addEventListener('click', () => {
+    const v = box.querySelector('.cid').value.trim();
+    if (v) startSpotifyAuth(v);
+  });
+}
+
+async function spotifySection() {
+  const CFG = window.LG_CONFIG || {};
+  const flash = window.__spotifyFlash;
+  window.__spotifyFlash = null;
+
+  /* result of a just-completed authorisation */
+  if (flash && flash.ok) {
+    const r = row('ok', '✓', 'Connexion Spotify réussie',
+      'Un refresh token vient d\'être généré.');
+    secretBox(r, flash.ok,
+      'Colle-le dans <code>config.js</code>, champ <code>spotifyRefreshToken</code> :');
+  } else if (flash && flash.bad) {
+    row('bad', '✕', 'Échec de la connexion Spotify', flash.bad);
+  }
+
+  if (location.protocol !== 'file:' && location.hostname === 'localhost') {
+    row('warn', '!', 'Page ouverte via « localhost »',
+      location.origin,
+      `Spotify <b>refuse</b> les Redirect URI en <code>localhost</code> et exige <code>127.0.0.1</code>.
+       Rouvre cette page sur <code>${location.origin.replace('//localhost', '//127.0.0.1')}${location.pathname}</code> avant de connecter Spotify.`);
+  }
+
+  const cid = CFG.spotifyClientId || localStorage.getItem(SP_LS_CLIENT);
+  if (!cid) {
+    const r = row('warn', '!', 'Aucun Client ID Spotify',
+      'spotifyClientId vide dans config.js',
+      'Crée une app sur <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a> (coche « Web API »), puis colle son Client ID ci-dessous.');
+    connectButton(r, '', 'Connexion directe depuis cette page :');
+    return;
+  }
+  row('ok', '✓', 'Client ID Spotify présent', cid.slice(0, 10) + '…');
+
+  /* the classic mix-up: the client secret pasted into the token field */
+  const configured = CFG.spotifyRefreshToken || '';
+  if (/^[0-9a-f]{32}$/i.test(configured)) {
+    row('bad', '✕', 'La valeur dans spotifyRefreshToken est un CLIENT SECRET',
+      '32 caractères hexadécimaux = format d\'un Client Secret',
+      `Un Client Secret ne doit <b>jamais</b> se trouver dans du code client — régénère-le dans le dashboard Spotify.
+       Un vrai refresh token fait ~130 caractères et ne s'obtient que par le bouton ci-dessous.`);
+  }
+
+  const refresh = (/^[0-9a-f]{32}$/i.test(configured) ? '' : configured)
+    || localStorage.getItem(SP_LS_REFRESH);
+
+  if (!refresh) {
+    const r = row('warn', '!', 'Aucun refresh token Spotify',
+      'ni dans config.js, ni dans le localStorage de cette origine',
+      'Il ne figure nulle part dans le dashboard Spotify : il faut passer par l\'autorisation.');
+    connectButton(r, cid, 'Connexion directe depuis cette page :');
+    return;
+  }
+
+  /* validate it for real rather than just reporting its presence */
+  try {
+    const json = await spotifyToken({
+      grant_type: 'refresh_token',
+      refresh_token: refresh,
+      client_id: cid
+    });
+    if (json.refresh_token) localStorage.setItem(SP_LS_REFRESH, json.refresh_token);
+
+    const r = row('ok', '✓', 'Refresh token valide — Spotify a renvoyé un token d\'accès',
+      `expire dans ${json.expires_in || 3600} s, renouvelé automatiquement par l'overlay`);
+    if (!CFG.spotifyRefreshToken) {
+      secretBox(r, json.refresh_token || refresh,
+        'Il n\'est pas encore dans <code>config.js</code> — colle-le dans <code>spotifyRefreshToken</code> pour qu\'il survive à un vidage du cache d\'OBS :');
+    }
+
+    /* and show what is actually playing right now */
+    const np = await fetch('https://api.spotify.com/v1/me/player/currently-playing?additional_types=track,episode', {
+      headers: { Authorization: 'Bearer ' + json.access_token }
+    });
+    if (np.status === 204) {
+      row('warn', '!', 'Rien en cours de lecture sur Spotify', 'GET /me/player/currently-playing → 204',
+        'Lance un morceau puis relance le diagnostic pour vérifier de bout en bout.');
+    } else if (np.ok) {
+      const d = await np.json();
+      const item = d && d.item;
+      if (item) {
+        row('ok', '✓', `En écoute : ${item.name}`,
+          (item.artists ? item.artists.map(a => a.name).join(', ') : '') +
+          `  ·  ${d.is_playing ? 'lecture' : 'pause'}`,
+          'L\'overlay musique affichera exactement ça.');
+      }
+    } else {
+      row('warn', '!', `L'API Spotify a répondu ${np.status}`, 'GET /me/player/currently-playing');
+    }
+  } catch (e) {
+    const r = row('bad', '✕', 'Le refresh token ne fonctionne pas', e.message,
+      e.message.toLowerCase().includes('invalid')
+        ? 'Cette valeur n\'est pas un refresh token valide (souvent : un Client Secret collé par erreur). Reconnecte-toi ci-dessous.'
+        : 'Reconnecte-toi ci-dessous pour en générer un nouveau.');
+    connectButton(r, cid, 'Regénérer un refresh token :');
+  }
+}
+
+document.getElementById('again').addEventListener('click', run);
+run();
+</script>
+</body>
+</html>

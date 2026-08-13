@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Durée de live — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<link rel="stylesheet" href="../shared/widget.css">
+<script src="../config.js"></script>
+<script src="../shared/scale.js"></script>
+<style>
+  #uptimeOut, #clockOut { font-variant-numeric: tabular-nums; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div id="bar" class="pill glass fade">
+  <span class="label" id="labelOut">EN DIRECT</span>
+  <span id="uptimeOut">00:00:00</span>
+  <span class="sep hidden" id="sepViewers"></span>
+  <span id="viewersOut" class="hidden"></span>
+  <span class="sep hidden" id="sepClock"></span>
+  <span id="clockOut" class="hidden">--:--</span>
+</div>
+<div id="debug"></div>
+
+<script src="../shared/widget.js"></script>
+<script src="../shared/twitch-live.js"></script>
+<script>
+/* ---------- paramètres --------------------------------------------------
+   ?viewers=1     ajoute le nombre de spectateurs
+   ?clock=1       ajoute l'heure locale
+   ?start=ISO     force l'heure de début (sinon celle renvoyée par Twitch)
+   ?anchor=center position dans la source
+   ?debug=1       badge d'état
+
+   Le chrono est calé sur le started_at réel de Twitch et recalculé à chaque
+   seconde depuis cette date absolue : il affiche la vraie durée du live même
+   après un rechargement de la source, et ne dérive jamais.
+------------------------------------------------------------------------- */
+const P = Widget.params;
+const SHOW_VIEWERS = P.get('viewers') === '1';
+const SHOW_CLOCK = P.get('clock') === '1';
+const forcedStart = P.get('start') ? new Date(P.get('start')) : null;
+
+const labelEl = document.getElementById('labelOut');
+const uptimeEl = document.getElementById('uptimeOut');
+const viewersEl = document.getElementById('viewersOut');
+const clockEl = document.getElementById('clockOut');
+const bar = document.getElementById('bar');
+
+if (SHOW_CLOCK) {
+  clockEl.classList.remove('hidden');
+  document.getElementById('sepClock').classList.remove('hidden');
+}
+
+const pageLoad = new Date();
+let liveSince = null;
+let liveKnown = false;
+
+function tick() {
+  const now = new Date();
+  if (SHOW_CLOCK) {
+    clockEl.textContent = String(now.getHours()).padStart(2, '0') + ':' +
+                          String(now.getMinutes()).padStart(2, '0');
+  }
+
+  if (forcedStart) {
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = TwitchLive.formatDuration(now - forcedStart);
+  } else if (liveKnown && liveSince) {
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = TwitchLive.formatDuration(now - liveSince);
+  } else if (liveKnown) {
+    /* Twitch a répondu « hors ligne » : pas de faux compteur qui tourne */
+    labelEl.textContent = 'HORS LIGNE';
+    uptimeEl.textContent = '--:--:--';
+  } else {
+    /* pas de token, ou pas encore de réponse : approximation depuis le
+       chargement de la page */
+    labelEl.textContent = 'EN DIRECT';
+    uptimeEl.textContent = TwitchLive.formatDuration(now - pageLoad);
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+bar.classList.add('on');
+
+TwitchLive.onUpdate(s => {
+  if (s.ready) {
+    liveKnown = true;
+    liveSince = s.liveSince;
+  }
+
+  if (SHOW_VIEWERS && s.live) {
+    viewersEl.textContent = s.viewers.toLocaleString('fr-FR') + ' 👥';
+    viewersEl.classList.remove('hidden');
+    document.getElementById('sepViewers').classList.remove('hidden');
+  } else {
+    viewersEl.classList.add('hidden');
+    document.getElementById('sepViewers').classList.add('hidden');
+  }
+
+  tick();   // refléter la correction tout de suite, pas à la seconde suivante
+
+  Widget.setDebug('twitch', !s.enabled ? 'pas de token'
+    : s.error ? 'erreur — ' + s.error
+    : s.ready ? (s.live ? 'en ligne' : 'hors ligne') + ' (' + s.credSource + ')'
+    : 'connexion…');
+});
+
+TwitchLive.start();
+</script>
+</body>
+</html>

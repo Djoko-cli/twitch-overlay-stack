@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Stinger — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<style>
+  /* Fond solide par défaut : une source enregistrée SANS canal alpha (n'importe
+     quel format OBS, aucune config spéciale) reste un stinger valide, puisque
+     le panneau couvre déjà tout l'écran au milieu de l'animation. ?alpha=1
+     repasse en transparent pour ceux qui veulent exporter en vidéo alpha
+     (ProRes 4444 / VP9+alpha) et laisser le jeu/webcam transparaître autour
+     du panneau — voir le README pour les deux workflows. */
+  body { background: #0b0713; }
+  body.alpha { background: transparent; }
+
+  #stage {
+    position: fixed; inset: 0;
+    overflow: hidden;
+  }
+
+  /* Le panneau de verre qui balaie l'écran. Un seul élément porte
+     l'animation ; ses bords lumineux (::before/::after) suivent
+     automatiquement puisqu'ils sont positionnés à l'intérieur de sa propre
+     boîte transformée — pas besoin de synchroniser plusieurs animations. */
+  #panel {
+    position: absolute;
+    top: -25%; left: 50%;
+    width: 130vw; height: 150%;
+    margin-left: -65vw;
+    background:
+      /* reflet diagonal fixe : lu comme un "flash" au passage */
+      linear-gradient(100deg,
+        rgba(255,255,255,0) 34%, rgba(255,255,255,.55) 46%,
+        rgba(255,255,255,.92) 50%, rgba(255,255,255,.55) 54%,
+        rgba(255,255,255,0) 66%),
+      /* palette alignée sur les blobs de brb/ending/starting-soon (rouge
+         #E4002B, orange #ff7a00, cyan #00e5ff). Rouge et orange sont voisins
+         sur le cercle chromatique donc se fondent proprement l'un dans
+         l'autre ; le blanc central sert de charnière avant le cyan pour
+         éviter qu'un rouge/cyan saturés ne se percutent directement et ne
+         tournent au gris boueux dans le dégradé.
+
+         Angle à 90deg (strictement horizontal) et non pas incliné comme le
+         reflet du dessus : un angle non-horizontal combiné au skewX() du
+         panneau fait varier la couleur selon la ligne (le haut et le bas du
+         panneau n'affichent alors pas le même arrêt du dégradé), ce qui
+         faisait apparaître du cyan pile au bord censé être rouge. En 90deg,
+         une colonne verticale du panneau est toujours une seule couleur —
+         le seul effet diagonal vient du skew, pas de deux diagonales qui se
+         contrarient.
+
+         Arrêts resserrés vers le centre : le panneau déborde largement
+         l'écran (130vw pour 100vw de canvas), donc les tout premiers/derniers
+         pourcents du dégradé ne sont JAMAIS visibles à l'instant où le
+         panneau couvre tout l'écran — les placer à 0%/100% (comme un
+         premier essai) rendait le rouge quasi invisible pendant le moment
+         clé de la transition. */
+      linear-gradient(90deg,
+        rgba(228,0,43,.92) 10%,
+        rgba(255,122,0,.94) 32%,
+        rgba(255,255,255,.97) 50%,
+        rgba(0,229,255,.94) 68%,
+        rgba(228,0,43,.88) 90%);
+    -webkit-backdrop-filter: blur(2px) saturate(140%);
+    backdrop-filter: blur(2px) saturate(140%);
+    animation: wipe-across var(--dur, 900ms) cubic-bezier(.76, 0, .24, 1) 1 both;
+  }
+
+  /* bord lumineux en tête de balayage (le panneau va vers la droite, donc
+     son bord droit est le bord "meneur") — glow orange devant, cyan derrière,
+     mêmes teintes que le dégradé du panneau */
+  #panel::before {
+    content: "";
+    position: absolute; top: -10%; right: -3px;
+    width: 6px; height: 120%;
+    background: linear-gradient(180deg, transparent, #fff 15%, #fff 85%, transparent);
+    box-shadow:
+      0 0 24px 4px rgba(255, 255, 255, .9),
+      16px 0 46px rgba(255, 122, 0, .55),
+      -16px 0 46px rgba(0, 229, 255, .5);
+    filter: blur(.5px);
+  }
+
+  /* bord plus doux en queue de balayage — cyan devant, rouge derrière */
+  #panel::after {
+    content: "";
+    position: absolute; top: -10%; left: -3px;
+    width: 6px; height: 120%;
+    background: linear-gradient(180deg, transparent, #fff 15%, #fff 85%, transparent);
+    box-shadow:
+      0 0 16px 2px rgba(255, 255, 255, .55),
+      -14px 0 34px rgba(0, 229, 255, .40),
+      10px 0 30px rgba(228, 0, 43, .30);
+    filter: blur(.5px);
+    opacity: .7;
+  }
+
+  @keyframes wipe-across {
+    0%   { transform: translateX(-140vw) skewX(-12deg); }
+    50%  { transform: translateX(0)      skewX(-12deg); }
+    100% { transform: translateX(140vw)  skewX(-12deg); }
+  }
+
+  #debug {
+    display: none;
+    position: fixed; left: 10px; bottom: 10px;
+    font-family: var(--font); font-size: 12px; color: rgba(255,255,255,.7);
+    background: rgba(0,0,0,.5); padding: 4px 10px; border-radius: var(--radius-pill);
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"><div id="panel"></div></div>
+<div id="debug"></div>
+
+<script>
+/* ---------- config via query string ------------------------------------
+   ?duration=900   durée totale en ms (400–3000). Le point de bascule à
+                    régler dans OBS (Transition Point) est TOUJOURS la
+                    moitié de cette valeur — c'est l'instant où le panneau
+                    couvre tout l'écran.
+   ?direction=ltr   ltr (défaut, gauche→droite) ou rtl (droite→gauche)
+   ?alpha=1         fond transparent au lieu du fond sombre par défaut —
+                     pour un export vidéo avec canal alpha (voir README)
+   ?debug=1         affiche la durée et le point de bascule conseillé
+
+   Rejoue l'animation : clic n'importe où, ou touche Espace / R.
+-------------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+const DURATION = Math.min(3000, Math.max(400, parseInt(params.get('duration') || '900', 10)));
+const RTL = (params.get('direction') || '').toLowerCase() === 'rtl';
+const ALPHA = params.get('alpha') === '1';
+const DEBUG = params.get('debug') === '1';
+
+document.documentElement.style.setProperty('--dur', DURATION + 'ms');
+if (ALPHA) document.body.classList.add('alpha');
+
+const panel = document.getElementById('panel');
+if (RTL) panel.style.animationDirection = 'reverse';
+
+const debugEl = document.getElementById('debug');
+if (DEBUG) {
+  debugEl.style.display = 'block';
+  debugEl.textContent = `durée: ${DURATION}ms · point de bascule OBS conseillé: ${Math.round(DURATION / 2)}ms · sens: ${RTL ? 'droite→gauche' : 'gauche→droite'} · fond: ${ALPHA ? 'transparent' : 'opaque'}`;
+}
+
+function replay() {
+  panel.style.animation = 'none';
+  void panel.offsetWidth;   // force le navigateur à "oublier" l'état précédent
+  panel.style.animation = '';
+}
+document.addEventListener('click', replay);
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'KeyR') replay();
+});
+</script>
+</body>
+</html>

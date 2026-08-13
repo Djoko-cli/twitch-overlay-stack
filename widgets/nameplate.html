@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Plaque pseudo — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<link rel="stylesheet" href="../shared/widget.css">
+<script src="../config.js"></script>
+<script src="../shared/scale.js"></script>
+<style>
+  .name { font-weight: 800; }
+  .game { color: var(--text-dim); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+
+<div id="plate" class="pill glass fade">
+  <span class="live-dot" id="dot"></span>
+  <span class="name" id="nameOut">djokoow</span>
+  <span class="sep"></span>
+  <span class="game" id="gameOut">Just Chatting</span>
+</div>
+<div id="debug"></div>
+
+<script src="../shared/widget.js"></script>
+<script src="../shared/twitch-live.js"></script>
+<script>
+/* ---------- paramètres --------------------------------------------------
+   ?name=djokoow          force le pseudo (sinon récupéré depuis Twitch)
+   ?game=Just%20Chatting   force le jeu (sinon récupéré depuis Twitch)
+   ?title=1                affiche le titre du stream au lieu du jeu
+   ?anchor=center          position dans la source
+   ?debug=1                badge d'état
+------------------------------------------------------------------------- */
+const P = Widget.params;
+const forcedName = P.get('name');
+const forcedGame = P.get('game');
+const SHOW_TITLE = P.get('title') === '1';
+
+const nameEl = document.getElementById('nameOut');
+const gameEl = document.getElementById('gameOut');
+const dotEl = document.getElementById('dot');
+const plate = document.getElementById('plate');
+
+if (forcedName) nameEl.textContent = forcedName;
+if (forcedGame) gameEl.textContent = forcedGame;
+
+/* visible dès le départ : ce widget affiche toujours quelque chose, même
+   sans identifiants Twitch (il retombe sur les paramètres d'URL) */
+plate.classList.add('on');
+
+TwitchLive.onUpdate(s => {
+  if (!forcedName && s.displayName) nameEl.textContent = s.displayName;
+
+  if (!forcedGame) {
+    const text = SHOW_TITLE ? (s.title || s.game) : (s.game || s.title);
+    if (text) gameEl.textContent = text;
+  }
+
+  /* pastille grise seulement quand Twitch a confirmé le hors-ligne : sans
+     identifiants on ne sait rien, autant ne pas affirmer le contraire */
+  dotEl.classList.toggle('off', s.ready && !s.live);
+
+  Widget.setDebug('twitch', !s.enabled ? 'pas de token'
+    : s.error ? 'erreur — ' + s.error
+    : s.ready ? (s.live ? 'en ligne' : 'hors ligne') + ' (' + s.credSource + ')'
+    : 'connexion…');
+});
+
+TwitchLive.start();
+</script>
+</body>
+</html>

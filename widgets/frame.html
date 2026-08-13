@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Cadre webcam — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<link rel="stylesheet" href="../shared/widget.css">
+<script src="../config.js"></script>
+<script src="../shared/scale.js"></script>
+<style>
+  /* le cadre remplit toute la source : pas de centrage ni de marge ici,
+     contrairement aux pastilles */
+  body { padding: 0; display: block; }
+
+  @property --mic { syntax: '<number>'; inherits: true; initial-value: 0; }
+
+  /* Conteneur de l'éclat animé (mode round, par défaut). Doit être positionné
+     en absolu et remplir la source : .fringe-spin ne pose que
+     position:relative, et comme son unique enfant est lui-même en absolu, il
+     s'effondrerait à une hauteur nulle — ce qui aplatit tout le cadre en une
+     ligne en haut. */
+  #frame {
+    position: absolute;
+    inset: 0;
+    /* zoom annulé : le cadre remplit déjà la source, le mettre à l'échelle
+       le ferait déborder. Ce sont l'épaisseur et le rayon qui suivent
+       --scale, via calc() plus bas. */
+    zoom: 1;
+  }
+  /* mode round (défaut) : glint sur le contour EXTÉRIEUR du cadre */
+  #frame.fringe-spin {
+    border-radius: calc(var(--radius-xl) * var(--scale));
+  }
+  /* inset ramené à 0 (au lieu du -2px partagé) pour que l'éclat ne soit pas
+     rogné par les bords de la source */
+  #frame.fringe-spin::after { inset: 0; padding: calc(3px * var(--scale)); }
+
+  /* Anneau de verre — deux formes possibles selon ?corners= (voir script) :
+
+     round (défaut) : un seul rayon, partagé par l'intérieur et l'extérieur —
+     c'est la technique historique (border-radius + masque content-box/
+     border-box), qui ne peut PAS donner deux rayons différents.
+
+     plug (?corners=plug) : coins EXTÉRIEURS droits, coins INTÉRIEURS (le
+     trou où la webcam apparaît) arrondis avec --radius-xl. Impossible avec
+     la technique round ci-dessus, donc gérée séparément via un clip-path SVG
+     calculé par updateRingClip() — voir le script plus bas. */
+  #ring {
+    position: absolute;
+    inset: 0;
+    padding: calc(var(--thickness, 16px) * var(--scale));
+    border-radius: calc(var(--radius-xl) * var(--scale));
+    background: var(--glass-fill-strong);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    box-shadow:
+      0 0 0 1px var(--glass-border) inset,
+      0 10px 40px rgba(0,0,0,.35),
+      var(--glass-fringe);
+  }
+  #ring.plug {
+    padding: 0;
+    border-radius: 0;
+    -webkit-mask: none;
+    mask: none;
+    /* clip-path posé dynamiquement par updateRingClip() */
+  }
+  /* ?solid=1 (voir shared/widget.js) : bande de l'anneau quasi-opaque plutôt
+     que translucide — le centre reste transparent (c'est le masque ou le
+     clip-path, pas le fill, qui découpe le trou pour la webcam), seule la
+     bande visible du cadre devient plus couvrante. Vaut pour les deux modes. */
+  body.solid #ring {
+    background: var(--glass-fill-solid);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, .16) inset,
+      0 10px 40px rgba(0,0,0,.35),
+      var(--glass-fringe);
+  }
+
+  /* Glint intérieur — mode plug uniquement. Positionné exactement sur le
+     trou (même inset que le padding de #ring en mode round), avec le même
+     rayon que le trou. Sans la classe .fringe-spin (ajoutée en JS seulement
+     en mode plug), c'est une boîte vide et invisible : aucun coût en mode
+     round. */
+  #innerGlint {
+    position: absolute;
+    zoom: 1;
+    inset: calc(var(--thickness, 16px) * var(--scale));
+    border-radius: calc(var(--radius-xl) * var(--scale));
+    pointer-events: none;
+  }
+
+  /* lueur intérieure qui monte avec le niveau du micro — sur le même box que
+     #frame (inset:0). Coins extérieurs : rond par défaut, droit en mode plug
+     (classe posée en JS) pour matcher la forme réelle du cadre. */
+  #micGlow {
+    position: absolute;
+    inset: 0;
+    border-radius: calc(var(--radius-xl) * var(--scale));
+    pointer-events: none;
+    box-shadow:
+      inset 0 0 calc((16px + var(--mic) * 62px) * var(--scale)) calc(var(--mic) * 7px * var(--scale))
+      rgba(168, 200, 255, calc(0.06 + var(--mic) * 0.5));
+  }
+  #micGlow.plug { border-radius: 0; }
+</style>
+</head>
+<body>
+
+<div id="frame"><div id="ring"></div><div id="innerGlint"></div></div>
+<div id="micGlow"></div>
+<div id="debug"></div>
+
+<script src="../shared/widget.js"></script>
+<script>
+/* ---------- paramètres --------------------------------------------------
+   ?thickness=16    épaisseur du cadre en px
+   ?corners=round   round (défaut, un seul rayon partagé) ou plug (coins
+                    extérieurs droits, trou intérieur arrondi — voir README)
+   ?mic=0           désactive la réaction au micro
+   ?micgain=1       sensibilité (0.5 = moins sensible, 2 = plus)
+   ?debug=1         badge d'état en bas à gauche
+------------------------------------------------------------------------- */
+const P = Widget.params;
+document.documentElement.style.setProperty('--thickness', (P.get('thickness') || '16') + 'px');
+
+const PLUG = (P.get('corners') || 'round').toLowerCase() === 'plug';
+
+const frameEl = document.getElementById('frame');
+const ringEl = document.getElementById('ring');
+const innerGlintEl = document.getElementById('innerGlint');
+const micGlowEl = document.getElementById('micGlow');
+
+if (PLUG) {
+  ringEl.classList.add('plug');
+  micGlowEl.classList.add('plug');
+  innerGlintEl.classList.add('fringe-spin');   // glint sur le contour intérieur (le trou)
+} else {
+  frameEl.classList.add('fringe-spin');        // comportement d'origine : glint sur le contour extérieur
+}
+
+/* ---------- forme "plug" : coins extérieurs droits, intérieurs ronds ------
+   Un seul clip-path SVG en evenodd : le rectangle extérieur (net) et le
+   rectangle intérieur (arrondi, le trou webcam) sont deux sous-tracés du
+   MÊME path — evenodd les traite comme "plein moins trou" quel que soit
+   leur sens de parcours, pas besoin de jongler avec le winding. Recalculé
+   à chaque redimensionnement : les coins doivent rester de vrais cercles à
+   n'importe quelle taille de source, jamais des ellipses. Inutile (et donc
+   pas exécuté) en mode round, qui garde l'ancienne technique CSS pure. */
+if (PLUG) {
+  const sharpRectPath = (w, h) => `M0,0 H${w} V${h} H0 Z`;
+  const roundedRectPath = (x, y, w, h, r) => {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    if (r === 0) return `M${x},${y} H${x + w} V${y + h} H${x} Z`;
+    return `M${x + r},${y} H${x + w - r} A${r},${r} 0 0 1 ${x + w},${y + r} ` +
+           `V${y + h - r} A${r},${r} 0 0 1 ${x + w - r},${y + h} ` +
+           `H${x + r} A${r},${r} 0 0 1 ${x},${y + h - r} ` +
+           `V${y + r} A${r},${r} 0 0 1 ${x + r},${y} Z`;
+  };
+
+  const updateRingClip = () => {
+    const w = ringEl.clientWidth, h = ringEl.clientHeight;
+    if (!w || !h) return;
+
+    const rootStyle = getComputedStyle(document.documentElement);
+    const scale = parseFloat(rootStyle.getPropertyValue('--scale')) || 1;
+    const thickness = (parseFloat(P.get('thickness')) || 16) * scale;
+    const innerRadiusBase = parseFloat(rootStyle.getPropertyValue('--radius-xl')) || 32;
+    const innerRadius = innerRadiusBase * scale;
+
+    const outer = sharpRectPath(w, h);
+    const inner = roundedRectPath(
+      thickness, thickness,
+      Math.max(0, w - thickness * 2), Math.max(0, h - thickness * 2),
+      innerRadius
+    );
+
+    ringEl.style.clipPath = `path(evenodd, "${outer} ${inner}")`;
+  };
+
+  updateRingClip();
+  new ResizeObserver(updateRingClip).observe(ringEl);
+  window.addEventListener('resize', updateRingClip);   // filet de sécurité, coût nul
+}
+
+/* OBS refuse l'accès micro aux sources navigateur par défaut : il faut le
+   lancer une fois avec --use-fake-ui-for-media-stream (voir README). En cas
+   de refus le cadre reste simplement statique, rien ne casse. */
+async function initMic() {
+  if (P.get('mic') === '0') { Widget.setDebug('micro', 'désactivé'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    Widget.setDebug('micro', 'indisponible');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.78;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+
+    const buf = new Uint8Array(analyser.fftSize);
+    const gain = parseFloat(P.get('micgain') || '1');
+    const FLOOR = 0.012, CEIL = 0.16;
+
+    (function frame() {
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      const level = Math.min(1, Math.max(0, ((rms - FLOOR) / (CEIL - FLOOR)) * gain));
+      document.documentElement.style.setProperty('--mic', level.toFixed(3));
+      requestAnimationFrame(frame);
+    })();
+
+    Widget.setDebug('micro', 'actif');
+  } catch (e) {
+    console.warn('Micro indisponible:', e.name, e.message);
+    Widget.setDebug('micro', 'refusé (' + e.name + ')');
+  }
+}
+initMic();
+</script>
+</body>
+</html>

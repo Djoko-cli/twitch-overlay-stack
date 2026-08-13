@@ -1,0 +1,289 @@
+/* ==========================================================================
+   Liquid Glass — design tokens & shared primitives for the OBS overlay stack
+   ========================================================================== */
+
+:root {
+  /* facteur d'échelle global, piloté par ?scale= (voir shared/scale.js).
+     1 = canvas 1920×1080, 2 = canvas 3840×2160. */
+  --scale: 1;
+
+  --glass-fill: linear-gradient(160deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.06) 55%,
+    rgba(255, 255, 255, 0.12) 100%);
+  --glass-fill-strong: linear-gradient(160deg,
+    rgba(255, 255, 255, 0.30) 0%,
+    rgba(255, 255, 255, 0.10) 55%,
+    rgba(255, 255, 255, 0.18) 100%);
+  /* backing quasi-opaque : le fond réel derrière une source OBS ne peut
+     jamais être flouté depuis la page (voir la note sur .glass plus bas) —
+     la seule façon de garantir la lisibilité quel que soit ce qu'il y a en
+     dessous (webcam claire, jeu qui flashe, chat qui défile) est un fond
+     sombre suffisamment couvrant. Utilisé par .glass-solid. */
+  --glass-fill-solid: linear-gradient(160deg,
+    rgba(9, 7, 14, 0.90) 0%,
+    rgba(9, 7, 14, 0.82) 55%,
+    rgba(9, 7, 14, 0.88) 100%);
+  --glass-border: rgba(255, 255, 255, 0.38);
+  --glass-border-dim: rgba(255, 255, 255, 0.18);
+  --glass-blur: blur(18px) saturate(165%);
+  /* chromatic-aberration fringe: red/blue split at the edge + a faint green
+     trace, offset in opposite directions — reusable via var() so every
+     glass surface gets the same subtle prismatic edge */
+  --glass-fringe:
+    2.5px 1px 2px 0 rgba(255, 55, 110, 0.6),
+    -2.5px -1px 2px 0 rgba(60, 170, 255, 0.6),
+    0 3px 2px 0 rgba(110, 255, 170, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -14px 20px -14px rgba(255, 255, 255, 0.06), var(--glass-fringe);
+  --radius-xl: 32px;
+  --radius-lg: 26px;
+  --radius-md: 18px;
+  --radius-sm: 12px;
+  --radius-pill: 999px;
+
+  --twitch: #9146FF;
+  --twitch-glow: rgba(145, 70, 255, 0.55);
+  --pink: #ff5ea8;
+  --blue: #4fc3ff;
+
+  --text: #ffffff;
+  --text-dim: rgba(255, 255, 255, 0.72);
+  --text-faint: rgba(255, 255, 255, 0.48);
+
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-family: var(--font);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* Core glass surface. Note: backdrop-filter only blurs content inside this
+   HTML page — OBS composites the browser source AFTER the page renders, so
+   it cannot blur your game/webcam behind it. The "glass" look here comes
+   from layered transparency + gradient highlights + border light, which is
+   the standard technique for OBS browser-source overlays. Full-bleed scenes
+   (starting-soon / brb / ending) DO get real blur, applied to their own
+   animated background blobs. See README for an optional OBS-side blur plugin
+   if you want literal blur-through on the chat/alerts/webcam sources. */
+.glass {
+  position: relative;
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+}
+
+.glass::before {
+  /* top specular sheen */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 45%);
+  opacity: 0.55;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+.glass-strong {
+  background: var(--glass-fill-strong);
+}
+
+/* "layer proof" : fond quasi-opaque au lieu du fond translucide habituel.
+   backdrop-filter reste posé (il ne coûte rien s'il n'a presque plus rien à
+   flouter en dessous) mais le vrai travail de lisibilité vient de l'opacité
+   du fill. Le reflet du haut (.glass::before) et la frange chromatique du
+   bord restent identiques — ça reste visuellement "glass", juste beaucoup
+   moins transparent. */
+.glass-solid {
+  background: var(--glass-fill-solid);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* floating blurred color blobs — usable wherever we render our OWN
+   background (full-screen scenes). Real, genuine blur — see note above. */
+.blob-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px) saturate(150%);
+  opacity: 0.85;
+  will-change: transform;
+}
+
+/* Wandering paths: several asymmetric keyframes instead of a single there-
+   and-back step, so the blobs drift on an irregular loop rather than
+   visibly oscillating. Each path also breathes (scale) and shifts hue a
+   little, which keeps the field alive without any hard motion. */
+@keyframes float-a {
+  0%   { transform: translate(0, 0) scale(1); }
+  22%  { transform: translate(12%, 7%) scale(1.16); }
+  44%  { transform: translate(5%, 16%) scale(0.94); }
+  68%  { transform: translate(-9%, 9%) scale(1.20); }
+  86%  { transform: translate(-4%, -6%) scale(1.04); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes float-b {
+  0%   { transform: translate(0, 0) scale(1); }
+  25%  { transform: translate(-13%, 8%) scale(1.12); }
+  47%  { transform: translate(-6%, -11%) scale(0.9); }
+  70%  { transform: translate(10%, -7%) scale(1.22); }
+  88%  { transform: translate(6%, 5%) scale(1.02); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes float-c {
+  0%   { transform: translate(0, 0) scale(1); }
+  20%  { transform: translate(9%, -12%) scale(1.18); }
+  46%  { transform: translate(-11%, -5%) scale(0.92); }
+  64%  { transform: translate(-7%, 12%) scale(1.24); }
+  85%  { transform: translate(8%, 6%) scale(1.06); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+/* slow hue drift layered on top of the movement — subtle, but it stops the
+   background from ever looking like a frozen gradient */
+.blob-field { animation: hue-drift 24s ease-in-out infinite; }
+@keyframes hue-drift {
+  0%, 100% { filter: hue-rotate(0deg); }
+  50%      { filter: hue-rotate(22deg); }
+}
+
+/* optional add-on: a specular glint that travels along the card's edge.
+   Deliberately NOT a full ring — a continuous outline would read as a
+   second rectangle drawn around the card. The conic gradient here is
+   mostly transparent with two short bright arcs, so at any instant only a
+   short segment of the edge is lit and it slides around the perimeter.
+
+   IMPORTANT: apply class="fringe-spin" to a plain WRAPPER div around the
+   glass card, never to the glass card itself — .glass sets overflow:hidden
+   (needed for its own sheen), which would clip the glint since it sits on
+   the card's outer edge. Example:
+     <div class="fringe-spin">
+       <div class="card glass glass-strong">...</div>
+     </div> */
+@property --spin-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.fringe-spin {
+  position: relative;
+  border-radius: var(--radius-xl);
+  /* met à l'échelle la carte ET son anneau d'un bloc (voir shared/scale.js).
+     widgets/frame.html annule ce zoom : son conteneur est en inset:0 et
+     serait débordé par la mise à l'échelle. */
+  zoom: var(--scale);
+}
+
+.fringe-spin::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  padding: 3px;
+  border-radius: inherit;
+  background: conic-gradient(from var(--spin-angle),
+    transparent 0deg,
+    transparent 20deg,
+    rgba(255, 255, 255, 1) 46deg,
+    rgba(214, 198, 255, 0.95) 58deg,
+    rgba(182, 226, 255, 0.70) 72deg,
+    transparent 104deg,
+    transparent 200deg,
+    rgba(255, 214, 240, 0.65) 228deg,
+    rgba(202, 196, 255, 0.48) 242deg,
+    transparent 272deg,
+    transparent 360deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: blur(2px) drop-shadow(0 0 10px rgba(206, 206, 255, 0.75));
+  pointer-events: none;
+  animation: spin-fwd 4.5s linear infinite;
+  z-index: 2;
+}
+
+/* a soft highlight sweeping across the glass face — clipped by the card's
+   own overflow:hidden, so it adds motion without drawing any outline.
+   Scoped to cards inside a .fringe-spin wrapper so it never touches chat
+   bubbles, alert cards or the webcam plate. */
+.fringe-spin .glass::after {
+  content: "";
+  position: absolute;
+  top: -60%;
+  left: -35%;
+  width: 34%;
+  height: 220%;
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.30) 42%,
+    rgba(255, 255, 255, 0.46) 50%,
+    rgba(255, 255, 255, 0.30) 58%,
+    rgba(255, 255, 255, 0) 100%);
+  filter: blur(22px);
+  pointer-events: none;
+  animation: sheen-sweep 6.5s ease-in-out infinite;
+}
+
+@keyframes sheen-sweep {
+  0%       { transform: translateX(-40%) rotate(16deg); opacity: 0; }
+  10%      { opacity: 1; }
+  60%      { opacity: 1; }
+  72%, 100% { transform: translateX(560%) rotate(16deg); opacity: 0; }
+}
+
+@keyframes spin-fwd {
+  from { --spin-angle: 0deg; }
+  to   { --spin-angle: 360deg; }
+}
+
+.badge-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.6;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.badge-chip img { display: block; width: 1.1em; height: 1.1em; }
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes pop-in {
+  0%   { opacity: 0; transform: translateY(24px) scale(0.9); }
+  70%  { opacity: 1; transform: translateY(-4px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes fade-out {
+  to { opacity: 0; transform: translateY(-10px) scale(0.97); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}

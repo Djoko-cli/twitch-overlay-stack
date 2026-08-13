@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Contrôle minuteur — Starting Soon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/timer-state.js"></script>
+<style>
+  /* Page d'outil, pas un overlay OBS : jamais montrée aux viewers, donc pas
+     besoin de la retenue visuelle des widgets — juste lisible et pratique. */
+  body {
+    width: 100vw; min-height: 100vh; margin: 0;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 20px;
+    background: #0b0713;
+  }
+
+  #panel {
+    width: min(94vw, 480px);
+    padding: 26px 24px;
+    display: flex; flex-direction: column; gap: 18px;
+    border-radius: var(--radius-lg);
+  }
+
+  h1 { font-size: 17px; margin: 0; }
+  .lede { margin: -10px 0 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+
+  .warn {
+    padding: 10px 12px; border-radius: 10px;
+    background: rgba(255, 122, 0, .16); border: 1px solid rgba(255, 122, 0, .4);
+    font-size: 12.5px; color: #ffd9ad; line-height: 1.5;
+  }
+
+  /* ---- aperçu en direct ---- */
+  #preview {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 20px; border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, .05); border: 1px solid var(--glass-border-dim);
+  }
+  #clock {
+    font-size: 40px; font-weight: 900; font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+  }
+  #status {
+    font-size: 12px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    padding: 3px 10px; border-radius: var(--radius-pill);
+  }
+  #status.running { color: #8affc1; background: rgba(138, 255, 193, .14); }
+  #status.paused  { color: #ffce6b; background: rgba(255, 206, 107, .14); }
+  #status.done    { color: #ff8a8a; background: rgba(255, 138, 138, .14); }
+  #targetOut { font-size: 11.5px; color: var(--text-faint); }
+
+  /* ---- sections de réglage ---- */
+  .section { display: flex; flex-direction: column; gap: 8px; }
+  .section label {
+    font-size: 11.5px; font-weight: 700; letter-spacing: .3px;
+    color: var(--text-dim); text-transform: uppercase;
+  }
+  .row { display: flex; gap: 8px; }
+  .row input {
+    flex: 1; min-width: 0;
+    padding: 10px 12px; border-radius: 9px;
+    border: 1px solid var(--glass-border-dim); background: rgba(0, 0, 0, .32);
+    color: #fff; font-family: var(--font); font-size: 14px;
+  }
+  .row input.fieldInvalid { border-color: #ff5a5a; }
+  .row input::placeholder { color: var(--text-faint); }
+
+  .fieldErr {
+    display: none;
+    font-size: 12px; color: #ff8a8a; font-weight: 600;
+  }
+  .fieldErr.on { display: block; }
+
+  button {
+    padding: 10px 16px; border: none; border-radius: 9px;
+    font-family: var(--font); font-size: 13.5px; font-weight: 700;
+    cursor: pointer; white-space: nowrap;
+    background: rgba(255, 255, 255, .12); color: #fff;
+  }
+  button:hover { background: rgba(255, 255, 255, .2); }
+  button.primary { background: #E4002B; }
+  button.primary:hover { background: #ff1a44; }
+  button:active { transform: translateY(1px); }
+
+  /* ---- ajustements rapides ---- */
+  #adjustRow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  #adjustRow button { background: rgba(0, 229, 255, .14); }
+  #adjustRow button:hover { background: rgba(0, 229, 255, .24); }
+
+  #pauseRow { display: flex; gap: 8px; }
+  #pauseRow button { flex: 1; }
+  #resetBtn { background: rgba(255, 122, 0, .16); }
+  #resetBtn:hover { background: rgba(255, 122, 0, .28); }
+
+  hr { border: none; border-top: 1px solid var(--glass-border-dim); margin: 2px 0; }
+
+  #urlBox {
+    display: flex; gap: 8px; align-items: center;
+    font-size: 12px;
+  }
+  #urlBox code {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: rgba(0, 0, 0, .35); padding: 8px 10px; border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+</style>
+</head>
+<body>
+
+<div id="panel" class="glass glass-strong">
+  <h1>Minuteur — Starting Soon</h1>
+  <p class="lede">Pilote le compte à rebours affiché sur la source
+    <code>screens/starting-soon.html</code>. Un rechargement de cette source
+    dans OBS ne réinitialise plus rien — elle retrouve toujours la cible
+    réglée ici.</p>
+
+  <div id="fileWarn" class="warn" style="display:none">
+    ⚠️ Cette page est ouverte en <code>file://</code>, donc sans serveur pour
+    contacter <code>/api/timer</code> — rien ne pourra se synchroniser.
+    Ouvre-la plutôt via <code>http://127.0.0.1:5500/controls/timer.html</code>.
+  </div>
+
+  <div id="serverWarn" class="warn" style="display:none">
+    ⚠️ Le serveur ne répond pas sur <code>/api/timer</code>. Si tu as lancé
+    <code>python3 -m http.server</code>, ça ne suffit plus — relance avec
+    <code>python3 server.py</code> à la place (voir README). Sans ça, ce
+    panneau et la source OBS ne peuvent pas se synchroniser, même à la même
+    adresse.
+  </div>
+
+  <div id="preview">
+    <div id="status">—</div>
+    <div id="clock">00:00:00</div>
+    <div id="targetOut"></div>
+  </div>
+
+  <div class="section">
+    <label>Démarrer un décompte</label>
+    <div class="row">
+      <input type="number" id="minutesInput" value="10" min="0" step="1" placeholder="minutes">
+      <button class="primary" id="startDurationBtn">Démarrer</button>
+    </div>
+    <div class="fieldErr" id="minutesErr"></div>
+  </div>
+
+  <div class="section">
+    <label>Viser une heure précise</label>
+    <div class="row">
+      <input type="text" id="absoluteInput" inputmode="numeric" placeholder="JJ/MM/AAAA HH:MM" autocomplete="off">
+      <button class="primary" id="startAbsoluteBtn">Définir</button>
+    </div>
+    <div class="fieldErr" id="absoluteErr"></div>
+  </div>
+
+  <div class="section">
+    <label>Ajuster le décompte en cours</label>
+    <div id="adjustRow">
+      <button data-adjust="-5">−5 min</button>
+      <button data-adjust="-1">−1 min</button>
+      <button data-adjust="1">+1 min</button>
+      <button data-adjust="5">+5 min</button>
+    </div>
+  </div>
+
+  <div id="pauseRow">
+    <button id="pauseBtn">Mettre en pause</button>
+    <button id="resetBtn">Réinitialiser (10 min)</button>
+  </div>
+
+  <hr>
+
+  <div class="section">
+    <label>Source à ajouter dans OBS</label>
+    <div id="urlBox">
+      <code id="overlayUrl"></code>
+      <button id="copyUrlBtn">Copier</button>
+    </div>
+  </div>
+</div>
+
+<script>
+if (location.protocol === 'file:') document.getElementById('fileWarn').style.display = 'block';
+
+const overlayUrl = location.origin + location.pathname.replace(/\/controls\/timer\.html$/, '/screens/starting-soon.html');
+document.getElementById('overlayUrl').textContent = overlayUrl;
+document.getElementById('copyUrlBtn').addEventListener('click', e => {
+  navigator.clipboard.writeText(overlayUrl).then(
+    () => { e.target.textContent = 'Copié ✓'; setTimeout(() => e.target.textContent = 'Copier', 1500); },
+    () => { e.target.textContent = 'Sélectionne à la main'; }
+  );
+});
+
+/* Champ texte plutôt que <input type="datetime-local"> : ce dernier ouvre le
+   calendrier natif du navigateur au clic sur le jour/mois (pas juste sur
+   l'icône), et rien ne permet de désactiver ça de façon fiable sur tous les
+   navigateurs. Un champ texte + parsing maison garantit qu'aucun calendrier
+   ne s'affiche jamais, au prix d'écrire notre propre validation (déjà fait
+   ci-dessous pour le "ne fait rien de visible" du champ vide). */
+function toLocalInputValue(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `${p(date.getDate())}/${p(date.getMonth() + 1)}/${date.getFullYear()} ${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
+/* "14/08/2026 14:20" → Date locale, ou null si le format ne correspond pas
+   ou si les valeurs sont hors plage (32/13/2026, 25:99, etc.) */
+function parseAbsoluteInput(raw) {
+  const m = raw.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const [, d, mo, y, h, mi] = m.map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+  const date = new Date(y, mo - 1, d, h, mi, 0, 0);
+  // rejette les dates qui "débordent" silencieusement (31/02 → 3 mars)
+  if (date.getMonth() !== mo - 1 || date.getDate() !== d) return null;
+  return date;
+}
+async function prefillAbsoluteInput() {
+  await TimerState.ready;
+  const state = TimerState.load();
+  const base = (state && !state.paused && new Date(state.targetISO) > new Date())
+    ? new Date(state.targetISO)
+    : new Date(Date.now() + 10 * 60000);
+  document.getElementById('absoluteInput').value = toLocalInputValue(base);
+}
+prefillAbsoluteInput();
+
+function pad(n) { return String(Math.max(0, Math.trunc(n))).padStart(2, '0'); }
+function fmt(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+function render() {
+  document.getElementById('serverWarn').style.display = TimerState.lastPollOk ? 'none' : 'block';
+
+  const state = TimerState.load();
+  const clockEl = document.getElementById('clock');
+  const statusEl = document.getElementById('status');
+  const targetEl = document.getElementById('targetOut');
+
+  if (!state) {
+    clockEl.textContent = '00:00:00';
+    statusEl.textContent = 'aucun minuteur';
+    statusEl.className = '';
+    targetEl.textContent = '';
+    return;
+  }
+
+  const ms = TimerState.remainingMs(state);
+  clockEl.textContent = fmt(ms);
+
+  if (state.paused) {
+    statusEl.textContent = 'En pause';
+    statusEl.className = 'paused';
+  } else if (ms <= 0) {
+    statusEl.textContent = 'Terminé';
+    statusEl.className = 'done';
+  } else {
+    statusEl.textContent = 'En cours';
+    statusEl.className = 'running';
+  }
+
+  targetEl.textContent = state.paused
+    ? `temps gelé — reprendrait à ${new Date(Date.now() + state.remainingMs).toLocaleTimeString('fr-FR')}`
+    : `cible : ${new Date(state.targetISO).toLocaleString('fr-FR')}`;
+
+  document.getElementById('pauseBtn').textContent = state.paused ? 'Reprendre' : 'Mettre en pause';
+}
+
+/* affiche/masque un message d'erreur sous un champ, au lieu de laisser le
+   bouton "ne rien faire" sans explication */
+function showFieldError(inputId, errId, message) {
+  const input = document.getElementById(inputId);
+  const err = document.getElementById(errId);
+  if (message) {
+    input.classList.add('fieldInvalid');
+    err.textContent = message;
+    err.classList.add('on');
+  } else {
+    input.classList.remove('fieldInvalid');
+    err.classList.remove('on');
+  }
+}
+['minutesInput', 'absoluteInput'].forEach((id, i) => {
+  const errId = ['minutesErr', 'absoluteErr'][i];
+  document.getElementById(id).addEventListener('input', () => showFieldError(id, errId, null));
+});
+
+document.getElementById('startDurationBtn').addEventListener('click', () => {
+  const raw = document.getElementById('minutesInput').value;
+  const minutes = parseFloat(raw);
+  if (raw === '' || !isFinite(minutes) || minutes < 0) {
+    showFieldError('minutesInput', 'minutesErr', 'Indique un nombre de minutes (0 ou plus).');
+    return;
+  }
+  showFieldError('minutesInput', 'minutesErr', null);
+  TimerState.startDuration(minutes);
+  render();
+});
+
+document.getElementById('startAbsoluteBtn').addEventListener('click', () => {
+  const raw = document.getElementById('absoluteInput').value;
+  if (!raw.trim()) {
+    showFieldError('absoluteInput', 'absoluteErr', 'Renseigne une date et une heure, au format JJ/MM/AAAA HH:MM.');
+    return;
+  }
+  const d = parseAbsoluteInput(raw);
+  if (!d) {
+    showFieldError('absoluteInput', 'absoluteErr', 'Format non reconnu — attendu : JJ/MM/AAAA HH:MM (ex. 14/08/2026 20:00).');
+    return;
+  }
+  showFieldError('absoluteInput', 'absoluteErr', null);
+  TimerState.startAbsolute(d);
+  render();
+});
+
+document.querySelectorAll('[data-adjust]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    TimerState.adjust(parseFloat(btn.dataset.adjust));
+    render();
+  });
+});
+
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  const state = TimerState.load();
+  if (state && state.paused) TimerState.resume(); else TimerState.pause();
+  render();
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  TimerState.reset(10);
+  render();
+});
+
+TimerState.ready.then(render);
+render();
+setInterval(render, 1000);
+</script>
+</body>
+</html>

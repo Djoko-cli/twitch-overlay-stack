@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Be Right Back — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<style>
+  body { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: #0b0713; }
+
+  .card {
+    position: relative; z-index: 1;
+    width: min(90vw, 660px);
+    padding: 52px 48px;
+    border-radius: var(--radius-xl);
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    text-align: center;
+  }
+
+  .icon-dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #ff4b4b; box-shadow: 0 0 20px #ff4b4b;
+    animation: pulse 1.4s ease-in-out infinite;
+    margin-bottom: 6px;
+  }
+
+  h1 { margin: 0; font-size: 38px; font-weight: 900; }
+  .sub { margin: 0; font-size: 16px; color: var(--text-dim); font-weight: 600; }
+  #elapsed { margin-top: 10px; font-size: 13px; font-weight: 700; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<div class="blob-field">
+  <div class="blob" style="width:42vw;height:42vw;top:-12%;right:-8%;background:#E4002B;animation:float-b 14s ease-in-out infinite;"></div>
+  <div class="blob" style="width:34vw;height:34vw;bottom:-10%;left:-6%;background:#ff7a00;animation:float-a 11s ease-in-out infinite;"></div>
+  <div class="blob" style="width:30vw;height:30vw;top:22%;left:12%;background:#00e5ff;animation:float-c 17s ease-in-out infinite;"></div>
+</div>
+
+<div class="fringe-spin">
+  <div class="card glass glass-strong">
+    <div class="icon-dot"></div>
+    <h1 id="titleOut">De retour dans un instant</h1>
+    <p class="sub" id="subOut">Merci de patienter !</p>
+    <div id="elapsed">00:00</div>
+  </div>
+</div>
+
+<script>
+/* ---------- config via query string ------------------------------------
+   ?title=De%20retour%20dans%20un%20instant
+   ?sub=Texte%20libre
+-------------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+if (params.get('title')) document.getElementById('titleOut').textContent = params.get('title');
+if (params.get('sub')) document.getElementById('subOut').textContent = params.get('sub');
+
+const start = new Date();
+function pad(n) { return String(n).padStart(2, '0'); }
+function tick() {
+  const diff = new Date() - start;
+  const m = Math.floor(diff / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  document.getElementById('elapsed').textContent = `${pad(m)}:${pad(s)}`;
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

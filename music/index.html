@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Musique — Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/liquid-glass.css">
+<script src="../shared/scale.js"></script>
+<script src="../config.js"></script>
+<style>
+  /* The padding is not decoration: shadows are drawn OUTSIDE the card's box,
+     so without room for them the glow is cut off dead straight at the source
+     edge. Sizing is derived from the actual shadows, not guessed —
+     an `0 Ypx Bpx` shadow reaches B-Y above, B+Y below and B to each side:
+       glass-shadow  0 10px 34px  → 24 top / 44 bottom / 34 sides
+       art glow      0  8px 40px  → 32 top / 48 bottom / 40 sides
+     so 34 / 42 / 50 clears the largest of them with a little slack. */
+  /* Centred by default: the reserved space then sits on all four sides, so
+     the halo can't be clipped on whichever edge the widget happens to be
+     pushed against. ?anchor= overrides both axes. */
+  body {
+    width: 100vw; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    /* multiplié par --scale : le halo grossit avec la carte, la réserve doit
+       suivre sinon elle redevient insuffisante en 4K */
+    padding: calc(34px * var(--scale)) calc(42px * var(--scale)) calc(50px * var(--scale));
+  }
+
+  /* the compact pill is meant to be discreet, so it gets a tighter glow —
+     which in turn needs far less reserved space (14 top / 22 bottom / 18
+     sides), keeping the OBS source close to the widget's real size */
+  body.compact {
+    padding: calc(18px * var(--scale)) calc(24px * var(--scale)) calc(26px * var(--scale));
+  }
+
+  /* dominant colour pulled from the album art, used for the glow */
+  @property --art-r { syntax: '<number>'; inherits: true; initial-value: 145; }
+  @property --art-g { syntax: '<number>'; inherits: true; initial-value: 70; }
+  @property --art-b { syntax: '<number>'; inherits: true; initial-value: 255; }
+
+  #card {
+    /* zoom, pas transform : il agit sur la mise en page, donc les mesures de
+       débordement du texte (défilement) restent justes à toute échelle */
+    zoom: var(--scale);
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 20px 12px 12px;
+    border-radius: 22px;
+    width: min(96vw, var(--card-width, 400px));
+    opacity: 0;
+    transform: translateY(-10px) scale(.97);
+    transition: opacity .45s ease, transform .45s cubic-bezier(.2,.8,.2,1);
+    box-shadow:
+      var(--glass-shadow),
+      0 8px 40px rgba(var(--art-r), var(--art-g), var(--art-b), .38);
+  }
+  #card.on { opacity: 1; transform: translateY(0) scale(1); }
+
+  #art {
+    width: 62px; height: 62px;
+    border-radius: 14px;
+    object-fit: cover;
+    flex: none;
+    background: rgba(255,255,255,.1);
+    box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
+
+  .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+  /* marquee: only scrolls when the text genuinely overflows (a .scroll class
+     is added from JS after measuring) */
+  .line { overflow: hidden; white-space: nowrap; position: relative; }
+  /* Direct child only. `.line span` would also match the nested title /
+     separator / artist spans of the compact layout, applying the scroll
+     padding three times over — which both spread the text apart and
+     inflated the measured width enough to trigger a bogus marquee.
+     vertical-align:top matters too: an inline-block sits on the baseline,
+     reserving descender space that silently adds ~5px to the line height. */
+  .line > span { display: inline-block; vertical-align: top; }
+  .line.scroll > span { animation: marquee 12s linear infinite; padding-right: 40px; }
+  @keyframes marquee {
+    0%, 12%   { transform: translateX(0); }
+    88%, 100% { transform: translateX(var(--shift, -50%)); }
+  }
+
+  #title { font-size: 16px; font-weight: 800; letter-spacing: .1px; }
+  #artist { font-size: 13px; font-weight: 600; color: var(--text-dim); }
+
+  /* equalizer — animates only while actually playing */
+  #eq { display: flex; align-items: flex-end; gap: 3px; height: 20px; flex: none; }
+  #eq i {
+    display: block; width: 3px; border-radius: 2px;
+    background: rgba(255,255,255,.85);
+    height: 20%;
+  }
+  #card.playing #eq i { animation: eq 900ms ease-in-out infinite; }
+  #card.playing #eq i:nth-child(2) { animation-duration: 640ms; }
+  #card.playing #eq i:nth-child(3) { animation-duration: 1100ms; }
+  #card.playing #eq i:nth-child(4) { animation-duration: 780ms; }
+  @keyframes eq {
+    0%, 100% { height: 22%; }
+    50%      { height: 100%; }
+  }
+
+  #progress {
+    position: absolute;
+    left: 12px; right: 12px; bottom: 6px;
+    height: 3px; border-radius: 999px;
+    background: rgba(255,255,255,.16);
+    overflow: hidden;
+  }
+  #fill {
+    height: 100%; width: 0%;
+    border-radius: inherit;
+    background: linear-gradient(90deg,
+      rgba(255,255,255,.95),
+      rgba(var(--art-r), var(--art-g), var(--art-b), 1));
+    transition: width .9s linear;
+  }
+
+  /* =====================================================================
+     Compact layout (?layout=compact) — a single-line pill sized to match
+     the webcam-frame pills (nameplate / uptime bar), so all three sit on
+     the same visual baseline. Those use 9px vertical padding with a 13px
+     font, giving ~38px tall; the 20px artwork here keeps the same height.
+     ===================================================================== */
+  #card.compact {
+    width: auto;
+    max-width: min(96vw, var(--card-width, 400px));
+    padding: 9px 18px 9px 9px;
+    border-radius: var(--radius-pill);
+    gap: 10px;
+    overflow: hidden;          /* clips the progress fill to the pill shape */
+  }
+  /* :not(#fillBg) is essential. `#card.compact > *` (id + class) outweighs
+     the `#fillBg` rule below, so without the exclusion it forces the
+     progress fill back to position:relative — turning it into a real flex
+     item whose width IS the progress percentage. The result is a blank gap
+     on the left of the pill that grows as the track plays. */
+  #card.compact > *:not(#fillBg) { position: relative; z-index: 1; }
+
+  /* tighter shadows than the full card — see the body.compact padding note */
+  #card.compact {
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, .34),
+      inset 0 1px 0 rgba(255, 255, 255, .30),
+      0 4px 18px rgba(var(--art-r), var(--art-g), var(--art-b), .34),
+      var(--glass-fringe);
+  }
+
+  #card.compact #art { width: 18px; height: 18px; border-radius: 50%; box-shadow: none; }
+  #card.compact #eq { height: 12px; gap: 2px; }
+  #card.compact #eq i { width: 2.5px; }
+
+  /* 18px line-height and 18px artwork are deliberate: with 9px padding both
+     sides that lands on exactly 36px, the measured height of the webcam
+     frame's pills. #title must be restated here — its 16px rule from the
+     full layout is more specific than `.line` and would otherwise push the
+     line box to 24px. */
+  #card.compact .line { font-size: 13px; font-weight: 700; line-height: 18px; }
+
+  /* Compact uses a seamless loop instead of the full layout's back-and-forth
+     marquee. The text is duplicated and the pair slides exactly one copy to
+     the left, so the second copy arrives precisely where the first started:
+     continuous right-to-left motion, no snap back, no gap opening up. */
+  #card.compact .line > span { display: inline-block; white-space: nowrap; }
+  #card.compact .chunk { display: inline-block; }
+  /* the breathing space between the two copies — only while looping, so a
+     short title doesn't get 40px of dead width added to the pill */
+  #card.compact .line.scroll .chunk { padding-right: 40px; }
+  #card.compact .line.scroll > span {
+    animation: marquee-loop var(--dur, 14s) linear infinite;
+    /* the generic .line.scroll rule adds 40px here; left in place it lands
+       between the two copies and the -50% shift no longer equals exactly one
+       copy, so the loop visibly jumps. The gap belongs on .chunk only. */
+    padding-right: 0;
+  }
+  @keyframes marquee-loop {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  /* Both the id and the class are targeted: the duplicated copy used for the
+     scroll loop has its ids stripped (they must stay unique), so id-only
+     rules would style the two copies differently. */
+  #card.compact #title, #card.compact .t { font-size: 13px; font-weight: 800; letter-spacing: 0; }
+  #card.compact #artist, #card.compact .a { font-size: 13px; color: var(--text-dim); font-weight: 600; }
+  #card.compact .dot-sep { color: rgba(255,255,255,.42); margin: 0 7px; }
+
+  /* progress becomes a translucent fill sweeping across the pill itself —
+     a thin bar would look wrong inside a fully rounded shape */
+  #fillBg {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0%;
+    z-index: 0;
+    background: linear-gradient(90deg,
+      rgba(var(--art-r), var(--art-g), var(--art-b), .34),
+      rgba(var(--art-r), var(--art-g), var(--art-b), .12));
+    transition: width .9s linear;
+    pointer-events: none;
+  }
+
+  /* ---- setup screen ---- */
+  #setup {
+    width: min(94vw, 520px);
+    padding: 26px 24px;
+    display: flex; flex-direction: column; gap: 13px;
+    border-radius: var(--radius-lg);
+  }
+  #setup h1 { font-size: 18px; margin: 0; }
+  #setup p { margin: 0; font-size: 13px; color: var(--text-dim); line-height: 1.55; }
+  #setup label { font-size: 12px; font-weight: 700; color: var(--text-dim); }
+  #setup input {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--glass-border-dim); background: rgba(0,0,0,.3);
+    color: #fff; font-family: var(--font); font-size: 14px;
+  }
+  #setup button {
+    margin-top: 4px; padding: 12px; border: none; border-radius: var(--radius-sm);
+    background: #1DB954; color: #fff; font-weight: 800; font-size: 14px;
+    cursor: pointer; font-family: var(--font);
+  }
+  #setup code { background: rgba(255,255,255,.12); padding: 1px 5px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+  #setup a { color: var(--blue); }
+  .status-line { font-size: 12px; color: var(--text-faint); }
+  .token-box {
+    margin-top: 6px; padding: 10px 12px; background: rgba(0,0,0,.4);
+    border-radius: 9px; font-size: 12px;
+  }
+  .token-box code { user-select: all; }
+  .token-box button {
+    margin: 8px 6px 0 0; padding: 6px 12px; font-size: 12px;
+    background: rgba(255,255,255,.16); border-radius: 8px;
+  }
+
+  #status-pill {
+    display: none;
+    position: fixed; bottom: 10px; left: 10px;
+    font-size: 11px; color: var(--text-faint);
+    background: rgba(0,0,0,.45); padding: 3px 9px; border-radius: var(--radius-pill);
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="status-pill">musique: init…</div>
+
+<script>
+/* =========================================================================
+   Spotify "en écoute" — Liquid Glass
+
+   Spotify access tokens expire after ONE HOUR, so the old implicit flow is
+   useless for a stream overlay: it would die mid-broadcast with no way to
+   renew. This uses Authorization Code + PKCE instead, which yields a
+   refresh token and can renew entirely client-side (no server, no client
+   secret). The refresh token is long-lived, so once it is pasted into
+   config.js the overlay keeps working across restarts.
+
+   ?layout=full    grande carte : pochette 62px, titre et artiste sur deux
+                   lignes, barre de progression (défaut)
+   ?layout=compact pastille sur une seule ligne, à la même hauteur que les
+                   pastilles du cadre webcam (~38px)
+   ?anchor=center  position dans la source OBS : center (défaut), top-left,
+                   top, top-right, left, right, bottom-left, bottom,
+                   bottom-right
+   ?width=400      largeur max de la carte en px
+   ?poll=4         intervalle d'interrogation en secondes (min 2)
+   ?hideidle=1     masquer complètement la carte quand rien ne joue (défaut)
+   ?debug=1        affiche un badge d'état en bas à gauche
+   ========================================================================= */
+const params = new URLSearchParams(location.search);
+const DEBUG = params.get('debug') === '1';
+const POLL = Math.max(2, parseInt(params.get('poll') || '4', 10)) * 1000;
+const HIDE_IDLE = params.get('hideidle') !== '0';
+const COMPACT = (params.get('layout') || 'full').toLowerCase() === 'compact';
+/* ?solid=1 : fond quasi-opaque, pour rester lisible peu importe ce qu'il y a
+   derrière dans OBS — voir .glass-solid dans shared/liquid-glass.css */
+const SOLID = params.get('solid') === '1';
+
+/* drives the reduced body padding that matches the compact card's tighter
+   shadows — must be on <body>, not the card, since it's the page that has
+   to reserve the space */
+if (COMPACT) document.body.classList.add('compact');
+
+/* ?anchor=center | top-left | top | top-right | left | right |
+           bottom-left | bottom | bottom-right
+   body is a row flexbox, so justify-content drives the horizontal axis and
+   align-items the vertical one. */
+(function applyAnchor() {
+  const raw = (params.get('anchor') || 'center').toLowerCase().trim();
+  const parts = raw.split(/[-_ ]+/);
+  const V = { top: 'flex-start', bottom: 'flex-end', center: 'center' };
+  const H = { left: 'flex-start', right: 'flex-end', center: 'center' };
+
+  let v = 'center', h = 'center';
+  parts.forEach(p => {
+    if (V[p] && p !== 'center') v = V[p];
+    if (H[p] && p !== 'center') h = H[p];
+  });
+
+  document.body.style.alignItems = v;
+  document.body.style.justifyContent = h;
+})();
+
+document.documentElement.style.setProperty('--card-width', (params.get('width') || '400') + 'px');
+
+const statusPill = document.getElementById('status-pill');
+if (DEBUG) statusPill.style.display = 'block';
+const setStatus = t => { statusPill.textContent = 'musique: ' + t; };
+
+const CFG = window.LG_CONFIG || {};
+const LS_CLIENT = 'lg_spotify_client_id';
+const LS_REFRESH = 'lg_spotify_refresh';
+const LS_VERIFIER = 'lg_spotify_verifier';
+
+function stored(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+const clientId = CFG.spotifyClientId || stored(LS_CLIENT);
+
+/* Spotify requires loopback redirects to use 127.0.0.1 — it rejects
+   "localhost" outright. Everything else in this stack happens to work on
+   either, so we normalise here and tell the user in the setup screen. */
+function redirectUri() {
+  return location.origin.replace('//localhost', '//127.0.0.1') + location.pathname;
+}
+
+/* ---------- PKCE helpers ------------------------------------------------ */
+function randomVerifier(len = 64) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  return Array.from(crypto.getRandomValues(new Uint8Array(len)), b => chars[b % chars.length]).join('');
+}
+function b64url(bytes) {
+  return btoa(String.fromCharCode.apply(null, bytes))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function challengeFor(verifier) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return b64url(new Uint8Array(digest));
+}
+
+/* ---------- setup screen ------------------------------------------------ */
+function showSetup(message, refreshToken) {
+  const uri = redirectUri();
+  document.getElementById('stage').innerHTML = `
+    <div id="setup" class="glass glass-strong">
+      <h1>Connecter Spotify</h1>
+      <p>1. Crée une app sur <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>.<br>
+         2. Dans ses réglages, ajoute <b>exactement</b> cette Redirect URI :<br>
+         <code>${uri}</code><br>
+         <span style="color:rgba(255,200,120,.95)">⚠️ Spotify refuse <code>localhost</code> : l'URL doit utiliser <code>127.0.0.1</code>. Ouvre donc cette page via <code>127.0.0.1</code>, pas <code>localhost</code>.</span><br>
+         3. Coche l'API « Web API » puis enregistre.</p>
+      <label>Client ID Spotify</label>
+      <input id="cid" placeholder="Client ID de ton app Spotify" value="${clientId || ''}">
+      <button id="go">Se connecter à Spotify</button>
+      <div class="status-line">${message || ''}</div>
+      ${refreshToken ? `
+        <div class="token-box">
+          <b>Connecté ✓</b> — colle ce <b>refresh token</b> dans <code>config.js</code>
+          (champ <code>spotifyRefreshToken</code>) pour que l'overlay reste connecté
+          même après un redémarrage d'OBS :
+          <div style="margin-top:8px"><code id="rt">••••••••••••••••••••••••</code></div>
+          <button id="copyRt">Copier</button><button id="showRt">Afficher</button>
+          <div style="margin-top:8px;color:rgba(255,180,180,.9)">⚠️ Secret : ne le montre pas en screen-share.</div>
+        </div>` : ''}
+    </div>`;
+
+  document.getElementById('go').addEventListener('click', async () => {
+    const cid = document.getElementById('cid').value.trim();
+    if (!cid) return;
+    store(LS_CLIENT, cid);
+
+    const verifier = randomVerifier();
+    store(LS_VERIFIER, verifier);
+    const challenge = await challengeFor(verifier);
+
+    const url = new URL('https://accounts.spotify.com/authorize');
+    url.searchParams.set('client_id', cid);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('redirect_uri', uri);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('code_challenge', challenge);
+    url.searchParams.set('scope', 'user-read-currently-playing user-read-playback-state');
+    location.href = url.toString();
+  });
+
+  if (refreshToken) {
+    const rtEl = document.getElementById('rt');
+    document.getElementById('copyRt').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(refreshToken).then(
+        () => { e.target.textContent = 'Copié ✓'; },
+        () => { e.target.textContent = 'Utilise "Afficher"'; }
+      );
+    });
+    document.getElementById('showRt').addEventListener('click', (e) => {
+      const hidden = rtEl.textContent.startsWith('•');
+      rtEl.textContent = hidden ? refreshToken : '••••••••••••••••••••••••';
+      e.target.textContent = hidden ? 'Masquer' : 'Afficher';
+    });
+  }
+}
+
+/* ---------- token exchange / refresh ------------------------------------ */
+async function tokenRequest(body) {
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body).toString()
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error_description || json.error || `HTTP ${res.status}`);
+  return json;
+}
+
+let accessToken = null;
+let refreshTimer = null;
+
+async function refreshAccessToken(refreshToken) {
+  const json = await tokenRequest({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: clientId
+  });
+  accessToken = json.access_token;
+  /* Spotify sometimes rotates the refresh token — keep the newest one */
+  if (json.refresh_token) store(LS_REFRESH, json.refresh_token);
+
+  /* renew a minute before the hour is up, so playback never gaps */
+  clearTimeout(refreshTimer);
+  const ms = Math.max(30, (json.expires_in || 3600) - 60) * 1000;
+  refreshTimer = setTimeout(() => {
+    refreshAccessToken(stored(LS_REFRESH) || refreshToken).catch(e => {
+      setStatus('échec du renouvellement — ' + e.message);
+    });
+  }, ms);
+
+  return accessToken;
+}
+
+/* ---------- handle the OAuth redirect ----------------------------------- */
+async function consumeRedirect() {
+  const code = params.get('code');
+  const error = params.get('error');
+  if (error) { showSetup('Autorisation refusée : ' + error); return true; }
+  if (!code) return false;
+
+  const verifier = stored(LS_VERIFIER);
+  history.replaceState(null, '', location.pathname);
+  if (!verifier) { showSetup('Session d\'autorisation perdue, réessaie.'); return true; }
+
+  try {
+    const json = await tokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri(),
+      client_id: clientId,
+      code_verifier: verifier
+    });
+    accessToken = json.access_token;
+    if (json.refresh_token) store(LS_REFRESH, json.refresh_token);
+    showSetup('', json.refresh_token || stored(LS_REFRESH));
+    start();
+    return true;
+  } catch (e) {
+    showSetup('Échec de l\'échange de token : ' + e.message);
+    return true;
+  }
+}
+
+/* ---------- now playing ------------------------------------------------- */
+const stage = document.getElementById('stage');
+let cardEl = null;
+let lastTrackId = null;
+
+function ensureCard() {
+  if (cardEl && document.body.contains(cardEl)) return cardEl;
+  stage.innerHTML = '';
+  cardEl = document.createElement('div');
+  cardEl.id = 'card';
+  cardEl.className = 'glass' + (SOLID ? ' glass-solid' : '') + (COMPACT ? ' compact' : '');
+
+  cardEl.innerHTML = COMPACT
+    /* one line: title and artist live in a single .chunk so the whole string
+       scrolls as one. The chunk is what gets duplicated for the seamless
+       loop — see applyLoopScroll. */
+    ? `<div id="fillBg"></div>
+       <img id="art" alt="">
+       <div class="line" id="oneLine"><span id="oneSpan"><span class="chunk" id="chunk"><span class="t" id="title"></span><span class="dot-sep">·</span><span class="a" id="artist"></span></span></span></div>
+       <div id="eq"><i></i><i></i><i></i></div>`
+    : `<img id="art" alt="">
+       <div class="meta">
+         <div class="line" id="titleLine"><span id="title"></span></div>
+         <div class="line" id="artistLine"><span id="artist"></span></div>
+       </div>
+       <div id="eq"><i></i><i></i><i></i><i></i></div>
+       <div id="progress"><div id="fill"></div></div>`;
+
+  stage.appendChild(cardEl);
+  return cardEl;
+}
+
+/* only scroll a line when it genuinely overflows its container */
+function applyMarquee(lineEl, spanEl) {
+  lineEl.classList.remove('scroll');
+  lineEl.style.removeProperty('--shift');
+  const overflow = spanEl.scrollWidth - lineEl.clientWidth;
+  if (overflow > 4) {
+    lineEl.style.setProperty('--shift', `-${overflow + 40}px`);
+    lineEl.classList.add('scroll');
+  }
+}
+
+/* Seamless right-to-left loop for the compact pill: duplicate the text, then
+   slide the pair left by exactly one copy. When the animation restarts, the
+   second copy is sitting where the first one began, so the reset is
+   invisible — no jump back, no gap appearing on either side.
+   Speed is constant (px/second) rather than a fixed duration, so a long
+   title doesn't race past faster than a short one. */
+const SCROLL_SPEED = 34;   // px per second
+
+function applyLoopScroll(lineEl, spanEl, chunkEl) {
+  lineEl.classList.remove('scroll');
+  spanEl.style.removeProperty('--dur');
+  spanEl.querySelectorAll('.chunk.clone').forEach(c => c.remove());
+
+  /* measure without the loop padding, which only exists while scrolling */
+  if (chunkEl.scrollWidth - lineEl.clientWidth <= 4) return;
+
+  lineEl.classList.add('scroll');           // adds the gap to .chunk
+  const travel = chunkEl.getBoundingClientRect().width;   // one copy + gap
+
+  const clone = chunkEl.cloneNode(true);
+  clone.classList.add('clone');
+  clone.removeAttribute('id');
+  clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+  spanEl.appendChild(clone);
+
+  spanEl.style.setProperty('--dur', Math.max(6, travel / SCROLL_SPEED).toFixed(1) + 's');
+}
+
+/* pull an average colour from the album art for the glow; silently skipped
+   if the CDN doesn't allow canvas access */
+function tintFromArt(img) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, 16, 16);
+    const d = ctx.getImageData(0, 0, 16, 16).data;
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; n++; }
+    r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+    /* push washed-out averages toward something with a bit of life */
+    const max = Math.max(r, g, b) || 1;
+    const boost = Math.min(1.7, 190 / max);
+    const root = document.documentElement.style;
+    root.setProperty('--art-r', Math.min(255, Math.round(r * boost)));
+    root.setProperty('--art-g', Math.min(255, Math.round(g * boost)));
+    root.setProperty('--art-b', Math.min(255, Math.round(b * boost)));
+  } catch (e) { /* canvas tainted — on garde la couleur par défaut */ }
+}
+
+function render(item, isPlaying, progressMs, durationMs) {
+  const card = ensureCard();
+  const id = item.id || item.uri || item.name;
+
+  if (id !== lastTrackId) {
+    lastTrackId = id;
+
+    const art = card.querySelector('#art');
+    const images = (item.album && item.album.images) || item.images || [];
+    const url = images.length ? images[images.length > 1 ? 1 : 0].url : '';
+    if (url) {
+      art.crossOrigin = 'anonymous';
+      art.onload = () => tintFromArt(art);
+      art.src = url;
+    } else {
+      art.removeAttribute('src');
+    }
+
+    const titleEl = card.querySelector('#title');
+    const artistEl = card.querySelector('#artist');
+    titleEl.textContent = item.name || '';
+    artistEl.textContent = item.artists
+      ? item.artists.map(a => a.name).join(', ')
+      : (item.show ? item.show.name : '');
+
+    /* Measure synchronously — reading scrollWidth forces a layout, so this
+       is already accurate, and it does not depend on requestAnimationFrame
+       firing (which a browser may throttle when it considers the page
+       non-visible). A second pass once webfonts land catches the width
+       change from the fallback font swapping to Inter. */
+    const remeasure = COMPACT
+      ? () => applyLoopScroll(
+          card.querySelector('#oneLine'),
+          card.querySelector('#oneSpan'),
+          card.querySelector('#chunk'))
+      : () => {
+          applyMarquee(card.querySelector('#titleLine'), titleEl);
+          applyMarquee(card.querySelector('#artistLine'), artistEl);
+        };
+    remeasure();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(remeasure);
+    setTimeout(remeasure, 250);
+  }
+
+  card.classList.toggle('playing', !!isPlaying);
+  card.classList.add('on');
+
+  const pct = durationMs ? Math.min(100, (progressMs / durationMs) * 100) : 0;
+  /* full layout uses the thin bar, compact fills the pill background */
+  const bar = card.querySelector(COMPACT ? '#fillBg' : '#fill');
+  if (bar) bar.style.width = pct.toFixed(2) + '%';
+}
+
+function hideCard() {
+  if (!cardEl) return;
+  lastTrackId = null;
+  cardEl.classList.remove('on', 'playing');
+}
+
+async function poll() {
+  if (!accessToken) return;
+  try {
+    const res = await fetch(
+      'https://api.spotify.com/v1/me/player/currently-playing?additional_types=track,episode',
+      { headers: { Authorization: 'Bearer ' + accessToken } }
+    );
+
+    if (res.status === 204) {           // rien en cours de lecture
+      if (HIDE_IDLE) hideCard();
+      setStatus('rien en lecture');
+      return;
+    }
+    if (res.status === 401) {           // token périmé plus tôt que prévu
+      setStatus('token expiré, renouvellement…');
+      const rt = CFG.spotifyRefreshToken || stored(LS_REFRESH);
+      if (rt) await refreshAccessToken(rt);
+      return;
+    }
+    if (res.status === 429) {           // rate limited — on laisse passer
+      setStatus('ralenti par Spotify');
+      return;
+    }
+    if (!res.ok) { setStatus('erreur API ' + res.status); return; }
+
+    const data = await res.json();
+    if (!data || !data.item) { if (HIDE_IDLE) hideCard(); return; }
+
+    render(data.item, data.is_playing, data.progress_ms || 0, data.item.duration_ms || 0);
+    setStatus(data.is_playing ? 'en lecture' : 'en pause');
+  } catch (e) {
+    setStatus('erreur — ' + e.message);
+  }
+}
+
+function start() {
+  poll();
+  setInterval(poll, POLL);
+}
+
+/* ---------- boot -------------------------------------------------------- */
+(async function boot() {
+  if (!clientId) { showSetup(); return; }
+  if (await consumeRedirect()) return;
+
+  const refreshToken = CFG.spotifyRefreshToken || stored(LS_REFRESH);
+  if (!refreshToken) { showSetup('Pas encore connecté.'); return; }
+
+  /* Very common mix-up: pasting the app's Client Secret (32 hex chars, shown
+     right next to the Client ID in the Spotify dashboard) into the refresh
+     token field. A real refresh token is ~130 chars of base64url and is only
+     ever produced by the authorisation flow. Catch it explicitly — and warn,
+     because a Client Secret must never sit in client-side code. */
+  if (/^[0-9a-f]{32}$/i.test(refreshToken)) {
+    showSetup('⚠️ Cette valeur ressemble au CLIENT SECRET de ton app Spotify, pas à un refresh token. ' +
+              'Un Client Secret ne doit jamais être mis dans du code client : régénère-le dans le dashboard Spotify. ' +
+              'Le refresh token (~130 caractères) s\'obtient uniquement via le bouton ci-dessus.');
+    setStatus('client secret détecté à la place du refresh token');
+    return;
+  }
+
+  setStatus('connexion…');
+
+  /* Spotify's docs say a refresh response MAY carry a new refresh_token.
+     In practice it currently doesn't, so the value in config.js keeps
+     working — but if Spotify ever starts rotating and invalidating the old
+     one, config.js would go stale with no way to self-heal. Trying the
+     rotated copy kept in localStorage as a fallback covers that case. */
+  const candidates = [refreshToken, stored(LS_REFRESH)]
+    .filter((v, i, a) => v && a.indexOf(v) === i);
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      await refreshAccessToken(candidate);
+      start();
+      return;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  showSetup('Le refresh token ne fonctionne plus (' + (lastError && lastError.message) + '). Reconnecte-toi.');
+})();
+</script>
+</body>
+</html>
