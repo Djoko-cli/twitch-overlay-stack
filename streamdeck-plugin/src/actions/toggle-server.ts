@@ -11,8 +11,9 @@ const execFileAsync = promisify(execFile);
 // de réimplémenter cette logique en TypeScript.
 const PORT = 5500;
 const CHECK_URL = `http://127.0.0.1:${PORT}/`;
-const START_SCRIPT = "/Users/Majid/Desktop/Twitch/bin/server-start.sh";
-const STOP_SCRIPT = "/Users/Majid/Desktop/Twitch/bin/server-stop.sh";
+const TIMER_URL = `http://127.0.0.1:${PORT}/controls/timer.html`;
+const START_SCRIPT = "/Users/Majid/Documents/Twitch/bin/server-start.sh";
+const STOP_SCRIPT = "/Users/Majid/Documents/Twitch/bin/server-stop.sh";
 const POLL_MS = 4000;
 const HTTP_TIMEOUT_MS = 1500;
 
@@ -22,6 +23,19 @@ async function isServerUp(): Promise<boolean> {
 		return res.ok;
 	} catch {
 		return false;
+	}
+}
+
+// `open` est la commande macOS pour lancer une URL dans le navigateur par
+// défaut — cohérent avec le reste du projet (.applescript, lsof), qui est
+// déjà Mac-only. Si le navigateur a déjà un onglet sur cette URL, la plupart
+// des navigateurs (Safari inclus) réactivent cet onglet plutôt que d'en
+// ouvrir un nouveau.
+async function openTimerPage(): Promise<void> {
+	try {
+		await execFileAsync("open", [TIMER_URL]);
+	} catch (e) {
+		streamDeck.logger.error(`ouverture du panneau minuteur échouée: ${e}`);
 	}
 }
 
@@ -57,7 +71,11 @@ export class ToggleServer extends SingletonAction {
 			if (up) {
 				await execFileAsync(STOP_SCRIPT, [String(PORT)]);
 			} else {
+				// server-start.sh ne retourne qu'une fois le port confirmé lié
+				// (voir son propre sleep + vérification), donc le serveur est
+				// déjà prêt à répondre quand on ouvre le panneau juste après.
 				await execFileAsync(START_SCRIPT, [String(PORT)]);
+				await openTimerPage();
 			}
 		} catch (e) {
 			streamDeck.logger.error(`bascule du serveur échouée: ${e}`);
