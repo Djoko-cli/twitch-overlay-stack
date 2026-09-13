@@ -799,9 +799,16 @@ dur dans les `.applescript` correspondants et relancer `make-apps.sh`.
 Un bouton unique dont l'**icône reflète l'état réel du serveur en
 permanence** (rond gris = arrêté, rond vert = en route — sondé toutes les 4
 secondes, pas seulement à l'appui), et qui bascule démarré/arrêté au clic.
-C'est le vrai plugin Stream Deck (SDK Elgato officiel) évoqué comme piste
-plus tôt — construit avec le CLI et le SDK officiels, **compilé et validé
-avec succès** (`streamdeck validate` → 0 erreur, 0 avertissement).
+**Au démarrage (passage à ON), il ouvre aussi automatiquement
+`controls/timer.html` dans le navigateur par défaut** — le serveur est déjà
+confirmé prêt à répondre à ce moment-là (`server-start.sh` ne rend la main
+qu'une fois le port lié), donc la page se charge sans race condition. Ça ne
+se déclenche que sur l'appui explicite du bouton, pas sur les sondages
+d'état en arrière-plan, pour éviter qu'un onglet s'ouvre tout seul si le
+serveur redémarre par un autre biais. C'est le vrai plugin Stream Deck (SDK
+Elgato officiel) évoqué comme piste plus tôt — construit avec le CLI et le
+SDK officiels, **compilé et validé avec succès** (`streamdeck validate` → 0
+erreur, 0 avertissement).
 
 ### Ce qui a été vérifié, et comment
 
